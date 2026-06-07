@@ -6,10 +6,48 @@ which provides a unified, tested, and maintained Vietnamese G2P pipeline.
 
 import functools
 import logging
+import re
 from typing import Optional
 from sea_g2p import SEAPipeline, G2P, Normalizer
 
 logger = logging.getLogger("Vieneu.Phonemizer")
+
+# ---------------------------------------------------------------------------
+# Inline non-verbal cues (emotion tokens) — v3 Turbo emotion checkpoint
+# ---------------------------------------------------------------------------
+# The emotion checkpoint was trained with three non-verbal cues embedded directly
+# in the PHONEME stream as special tokens. In the *text* they appear as bracketed
+# tags; phonemization must leave them as the matching <|emotion_k|> token instead
+# of spelling the bracketed words out. The mapping + spacing reproduce the
+# training data (cột `phones` của VieNeu-TTS-1000h-in-the-wild-coded) EXACTLY.
+#
+#   [chuckle]      / [cười]       -> <|emotion_1|>  (cười)
+#   [sigh]         / [thở dài]    -> <|emotion_2|>  (thở dài)
+#   [clear throat] / [hắng giọng] -> <|emotion_3|>  (hắng giọng)
+_EMOTION_TAG_TO_K = {
+    "chuckle": 1, "cười": 1, "cuoi": 1,
+    "sigh": 2, "thở dài": 2, "tho dai": 2,
+    "clear throat": 3, "hắng giọng": 3, "hang giong": 3,
+}
+# Split on a [bracketed tag] or an already-resolved <|emotion_k|> token.
+_EMOTION_SPLIT_RE = re.compile(r"(\[[^\]]+\]|<\|emotion_\d+\|>)")
+# Punctuation that stays attached to the preceding emotion token (no space),
+# mirroring the training phones, e.g. "... <|emotion_2|>. ...".
+_ATTACHING_PUNCT = set(".,!?;:…)]}\"'’”")
+
+
+def _emotion_tag_token(tag: str) -> Optional[str]:
+    """Map a raw ``[tag]`` / ``<|emotion_k|>`` string to its ``<|emotion_k|>`` form.
+
+    Returns ``None`` for an unrecognized bracketed span (caller phonemizes it as
+    ordinary text).
+    """
+    t = tag.strip()
+    if t.startswith("<|"):
+        return t  # already an explicit emotion token — pass through unchanged
+    inner = t[1:-1].strip().lower()  # drop the surrounding [ ]
+    k = _EMOTION_TAG_TO_K.get(inner)
+    return f"<|emotion_{k}|>" if k is not None else None
 
 # ---------------------------------------------------------------------------
 # Shared singletons (instantiation is lazy-safe and thread-safe via GIL)
@@ -49,6 +87,36 @@ def _phonemize_cached(text: str) -> str:
 def phonemize_text(text: str) -> str:
     """Normalize and phonemize a single Vietnamese/bilingual text string."""
     return _phonemize_cached(text)
+
+
+def phonemize_text_with_emotions(text: str) -> str:
+    """Phonemize ``text`` while preserving inline non-verbal cues as emotion tokens.
+
+    Same as :func:`phonemize_text`, but inline cues ``[cười]``/``[thở dài]``/
+    ``[hắng giọng]`` (or the English ``[chuckle]``/``[sigh]``/``[clear throat]``,
+    or an explicit ``<|emotion_k|>``) are kept as ``<|emotion_1|>``/``<|emotion_2|>``/
+    ``<|emotion_3|>`` in the phoneme stream instead of being spelled out. Used by the
+    v3 Turbo emotion checkpoint. Spacing matches the training data exactly: one
+    space before the token, with following punctuation attached.
+    """
+    if "[" not in text and "<|emotion_" not in text:
+        return _phonemize_cached(text)  # fast path: no cues → plain cached phonemize
+    out = ""
+    for i, part in enumerate(_EMOTION_SPLIT_RE.split(text)):
+        token = _emotion_tag_token(part) if i % 2 == 1 else None
+        if token is not None:
+            out = (out + " " + token) if out else token
+            continue
+        ph = _phonemize_cached(part) if part and part.strip() else ""
+        if not ph:
+            continue
+        if not out:
+            out = ph
+        elif ph[0] in _ATTACHING_PUNCT:
+            out += ph          # punctuation attaches to the previous token/phones
+        else:
+            out += " " + ph
+    return out
 
 
 def phonemize_batch(

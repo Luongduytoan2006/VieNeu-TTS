@@ -4,12 +4,24 @@
 [![Discord](https://img.shields.io/badge/Discord-Join%20Us-5865F2?logo=discord&logoColor=white)](https://discord.gg/yJt8kzjzWZ)
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1b9PO-lcGZX9pEkEwQmu8MfhSnjxKrALW?usp=sharing)
+[![Hugging Face VieNeu-TTS-v3-Turbo](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-v3--Turbo-red)](https://huggingface.co/pnnbao-ump/VieNeu-TTS-v3-Turbo)
 [![Hugging Face VieNeu-TTS-v2](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-v2-blue)](https://huggingface.co/pnnbao-ump/VieNeu-TTS-v2)
 [![Hugging Face VieNeu-TTS](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-v1-orange)](https://huggingface.co/pnnbao-ump/VieNeu-TTS)
 
 <img width="1087" height="710" alt="image" src="https://github.com/user-attachments/assets/5534b5db-f30b-4d27-8a35-80f1cf6e5d4d" />
 
 **VieNeu-TTS-v2** is the next generation of on-device Vietnamese TTS, featuring **10,000+ hours** of bilingual training, **instant voice cloning**, and a dedicated **Podcast/Conversation** mode.
+
+> [!NOTE]
+> **🆕 VieNeu-TTS v3 Turbo (early access) is out for preview!**
+> A brand-new architecture **designed and trained from scratch by Phạm Nguyễn Ngọc Bảo** (codec: [MOSS-Audio-Tokenizer-Nano](https://huggingface.co/OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano); phonemizer: [sea-g2p](https://github.com/pnnbao97/sea-g2p)):
+> - **48 kHz** high-fidelity audio (up from 24 kHz).
+> - **Built-in default voices** via dedicated speaker tokens — stable, consistent, no reference clip needed.
+> - **Emotion / non-verbal cues** *(experimental)*: drop `[cười]`, `[thở dài]`, `[hắng giọng]` straight into the text.
+> - **Batched generation** (batch size up to 32), including a multi-speaker **Conversation** mode that batches the whole script regardless of speaker.
+> - **Instant voice cloning** from 3–5s of audio.
+>
+> Try it in the Web UI (backbone **"VieNeu-TTS-v3-Turbo (Thử nghiệm)"**) or the SDK (`Vieneu(mode="v3turbo")`). The **full v3** release is coming in the next few weeks.
 
 > [!IMPORTANT]
 > **🚀 VieNeu-TTS-v2 is here!**
@@ -143,6 +155,34 @@ audio = tts.infer(text=text)
 tts.save(audio, "turbo_output.wav")
 ```
 
+### 🆕 v3 Turbo Mode (48 kHz, Default Voices & Emotion Cues)
+Use `mode="v3turbo"` for the new 48 kHz engine. Built-in default voices are called by name (no reference needed); inline emotion cues are **experimental**.
+
+```python
+from vieneu import Vieneu
+
+tts = Vieneu(mode="v3turbo")          # 48 kHz, loads the built-in default voices
+
+# Default voice (Ngọc Lan)
+audio = tts.infer("Xin chào, đây là VieNeu-TTS phiên bản ba Turbo.")
+tts.save(audio, "v3_output.wav")
+
+# Pick a built-in voice by name
+for label, voice_id in tts.list_preset_voices():
+    print(label, voice_id)
+audio = tts.infer("Mình là Xuân Vĩnh nè!", voice="Xuân Vĩnh")
+
+# Emotion / non-verbal cues (experimental): [cười] [thở dài] [hắng giọng]
+audio = tts.infer("Nghe hay quá đi [cười]. Để mình nói tiếp [hắng giọng].", voice="Ngọc Linh")
+
+# Instant voice cloning from a 3–5s reference
+audio = tts.infer("Đây là giọng được nhân bản tức thì.", ref_audio="my_voice.wav")
+
+# Low-latency streaming
+for chunk in tts.infer_stream("Văn bản dài sẽ phát theo từng đoạn.", voice="Ngọc Lan"):
+    ...  # play / send each chunk
+```
+
 ### 🦜 Zero-shot Voice Cloning (SDK) <a name="cloning"></a>
 Clone any voice with only **3-5 seconds** of audio. 
 
@@ -267,6 +307,7 @@ docker run --gpus all \
 
 | Model | Format | Device | Bilingual | Features | Speed |
 |---|---|---|---|---|---|
+| **VieNeu-TTS-v3-Turbo** *(early access)* | PyTorch | **GPU/CPU** | ✅ | **48 kHz, Default voices, Cloning, Emotion cues, Conversation** | **Fast (batched)** |
 | **VieNeu-TTS-v2** | PyTorch | **GPU** | ✅ | **Podcast, En-Vi CS** | **Fast (LMDeploy)** |
 | **VieNeu-v2-CPU** | GGUF/ONNX | **CPU/Edge** | ✅ | **Podcast, En-Vi CS** | **Extreme Speed** |
 | **VieNeu-v2-Turbo** | GGUF/ONNX | **CPU/Edge** | ✅ | Lightweight En-Vi | **Ultra Fast** |
@@ -283,6 +324,8 @@ docker run --gpus all \
 - [x] **VieNeu-TTS-v2**: Full high-fidelity bilingual architecture with **Podcast Mode** and **Voice Cloning**.
 - [x] **VieNeu-Codec**: Optimized neural codec for Vietnamese (ONNX).
 - [x] **Turbo Voice Cloning**: Bringing instant cloning to the lightweight Turbo engine.
+- [x] **VieNeu-TTS v3 Turbo (early access)**: New from-scratch 48 kHz architecture — built-in default voices (speaker tokens), experimental emotion cues, batched generation & multi-speaker conversation.
+- [ ] **VieNeu-TTS v3 (full release)**: Complete v3 with finalized quality, stable emotion control, more default voices & streaming server.
 - [ ] **Mobile SDK**: Official support for Android/iOS deployment.
 
 ---
@@ -327,6 +370,6 @@ Thanks to all the amazing people who have contributed to this project!
 
 ## 🙏 Acknowledgements
 
-This project uses [neucodec](https://huggingface.co/neuphonic/neucodec) for audio decoding and [sea-g2p](https://github.com/pnnbao97/sea-g2p) for text normalization and phonemization.
+This project uses [neucodec](https://huggingface.co/neuphonic/neucodec) (v1/v2) and [MOSS-Audio-Tokenizer-Nano](https://huggingface.co/OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano) (v3 Turbo) for audio coding, and [sea-g2p](https://github.com/pnnbao97/sea-g2p) for text normalization and phonemization.
 
 **Made with ❤️ for the Vietnamese TTS community**

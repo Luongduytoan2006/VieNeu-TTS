@@ -40,7 +40,8 @@ from apps.ui_constants import (
     css,
     head_html,
     DEFAULT_TEXT_GPU,
-    DEFAULT_TEXT_TURBO
+    DEFAULT_TEXT_TURBO,
+    DEFAULT_TEXT_V3
 )
 
 # --- CONSTANTS & CONFIG ---
@@ -63,6 +64,16 @@ except ImportError:
     pass
 
 filtered_backbones = {}
+
+# VieNeu-TTS v3 Turbo (early access) — PyTorch, runs on both CPU and GPU.
+# NOTE: this hardcoded `filtered_backbones` dict OVERRIDES config.yaml's
+# backbone_configs (see the reassignment below), so the model list is edited here.
+filtered_backbones["VieNeu-TTS-v3-Turbo (Thử nghiệm)"] = {
+    "repo": "pnnbao-ump/VieNeu-TTS-v3-Turbo-Fixed-vi-emotion",
+    "supports_streaming": False,
+    "description": "🆕 v3 Turbo (early access) — 48kHz. Giọng mặc định dùng speaker token (ổn định hơn); Voice Cloning clone từ audio mẫu. Hỗ trợ tag cảm xúc [cười]/[hắng giọng]/[thở dài] (thử nghiệm). Bản dùng thử trước; v3 đầy đủ sẽ ra mắt trong vài tuần tới."
+}
+
 if HAS_GPU:
     filtered_backbones["VieNeu-TTS-v2 (GPU)"] = {
         "repo": "pnnbao-ump/VieNeu-TTS-v2",
@@ -216,7 +227,9 @@ def should_use_lmdeploy(backbone_choice: str, device_choice: str) -> bool:
     if sys.platform == "darwin":
         return False
 
-    if "gguf" in backbone_choice.lower() or "v2-turbo" in backbone_choice.lower():
+    # GGUF, v2-Turbo và v3 Turbo đều KHÔNG dùng LMDeploy (v3 là PyTorch, có engine riêng).
+    bc = backbone_choice.lower()
+    if "gguf" in bc or "v2-turbo" in bc or "v3" in bc:
         return False
     
     try:
@@ -326,7 +339,9 @@ def load_model(backbone_choice: str, codec_choice: str, device_choice: str,
         # so we set use_lmdeploy = False here to avoid generic FastVieNeuTTS loading.
         # NOTE: For custom_loading, the block above already decided use_lmdeploy correctly
         # (e.g. False for GGUF repos). Do NOT override that decision here.
-        if "v2-Turbo" in backbone_choice:
+        if "v2-Turbo" in backbone_choice or "v3" in backbone_choice.lower():
+             # v2-Turbo có LMDeploy riêng trong class; v3 Turbo là PyTorch (engine riêng,
+             # không bao giờ dùng LMDeploy) — bỏ qua FastVieNeuTTS generic.
              should_use_generic_fast = False
         elif custom_loading:
              should_use_generic_fast = False  # already handled above per repo name
@@ -543,7 +558,19 @@ def load_model(backbone_choice: str, codec_choice: str, device_choice: str,
             print(f"   Backbone: {backbone_config['repo']} on {backbone_device}")
             print(f"   Codec: {codec_config['repo']} on {codec_device}")
             
-            if "v2-Turbo" in backbone_choice:
+            if "v3-Turbo" in backbone_choice:
+                # VieNeu v3 Turbo (PyTorch). Uses its own MOSS codec internally and
+                # clones from reference audio — no external decoder/codec needed.
+                print("   🆕 Mode: v3 Turbo (PyTorch)")
+                # Map the app's device string to what the v3 engine understands.
+                v3_device = "cpu" if str(backbone_device).lower() == "cpu" else "auto"
+                tts = Vieneu(
+                    mode="v3turbo",
+                    backbone_repo=backbone_config["repo"],
+                    device=v3_device,
+                    hf_token=custom_hf_token,
+                )
+            elif "v2-Turbo" in backbone_choice:
                 # VieNeu v2 Turbo uses the dedicated backend
                 print("   ⚡ Mode: Turbo")
                 mode = "turbo_gpu" if "GPU" in backbone_choice else "turbo"
@@ -699,9 +726,10 @@ def load_model(backbone_choice: str, codec_choice: str, device_choice: str,
             tab_sel = gr.update(selected="preset_mode")
             mode_state = "preset_mode"
 
-        # Check if v2 for conversation tab
+        # Conversation tab: available for v2 (sequential) and v3 Turbo (batched).
         is_v2 = (backbone_choice == "VieNeu-TTS-v2 (GPU)" or backbone_choice == "VieNeu-TTS-v2 (CPU)")
-        conv_tab_update = gr.update(visible=is_v2)
+        is_v3_conv = "v3" in (backbone_choice or "").lower()
+        conv_tab_update = gr.update(visible=is_v2 or is_v3_conv)
 
         # Update all MAX_SPEAKERS slot dropdowns
         slot_updates = [slot_dd_update] * MAX_SPEAKERS
@@ -800,27 +828,33 @@ def synthesize_speech(text: str, voice_choice: str, custom_audio, custom_text: s
     try:
         ref_codes = None
         ref_text_raw = ""
-        
+        # v3 Turbo only: speaker reserved token for built-in default voices. Stays
+        # None for voice cloning, so the engine uses the emotion-tag clone path.
+        v3_voice_token_id = None
+
         if mode_tab == "preset_mode":
             if not voice_choice:
                 raise ValueError("Vui lòng chọn giọng mẫu.")
             if "⚠️" in voice_choice:
                 raise ValueError("Không có giọng mẫu khả dụng. Vui lòng chuyển sang Tab Voice Cloning.")
-            
+
             # Use SDK method - handles caching and JSON internally
             v_id = resolve_voice_id(voice_choice)
             voice_data = tts.get_preset_voice(v_id)
             ref_codes = voice_data['codes']
             ref_text_raw = voice_data['text']
-        
+            v3_voice_token_id = voice_data.get('reserved_id')
+
         elif mode_tab == "custom_mode":
             if custom_audio is None:
                 raise ValueError("Vui lòng upload file Audio mẫu (Reference Audio)!")
             
-            is_turbo = "v2-Turbo" in (current_backbone or "")
-            if not is_turbo and (not custom_text or not custom_text.strip()):
+            cb_lower = (current_backbone or "").lower()
+            # Turbo v2 and v3 clone purely from audio → no reference transcript needed.
+            needs_ref_text = "v2-turbo" not in cb_lower and "v3" not in cb_lower
+            if needs_ref_text and (not custom_text or not custom_text.strip()):
                 raise ValueError("Vui lòng nhập nội dung văn bản của Audio mẫu (Reference Text)!")
-            
+
             ref_text_raw = custom_text.strip() if custom_text else ""
             ref_codes = tts.encode_reference(custom_audio)
 
@@ -836,6 +870,71 @@ def synthesize_speech(text: str, voice_choice: str, custom_audio, custom_text: s
     
     # === STANDARD MODE ===
     if generation_mode == "Standard (Một lần)":
+        # ============================ v3 TURBO BRANCH ========================
+        # VieNeu-TTS v3 Turbo: split the text into chunks and run them through the
+        # batched serving engine (vieneu.v3_turbo_serve) so multiple chunks share
+        # each forward step (big GPU throughput win at Batch Size 32). Falls back
+        # to single-utterance generation on CPU / 1 chunk / batching disabled.
+        if "v3" in (current_backbone or "").lower():
+            _t0 = time.time()
+            yield None, "⏳ Đang tổng hợp (v3 Turbo)..."
+            sr_v3 = getattr(tts, "sample_rate", 48000)
+            try:
+                from vieneu_utils.phonemize_text import phonemize_text_with_emotions
+                from vieneu_utils.core_utils import (
+                    split_text_into_chunks, join_audio_chunks,
+                )
+
+                v3_chunks = split_text_into_chunks(raw_text, max_chars=max_chars_chunk) or [raw_text]
+                v3_bs = max(1, int(max_batch_size_run)) if use_batch else 1
+                v3_engine_dev = getattr(getattr(tts, "engine", None), "device", None)
+                v3_can_batch = (
+                    v3_bs > 1 and len(v3_chunks) > 1
+                    and v3_engine_dev is not None and v3_engine_dev.type == "cuda"
+                )
+
+                if v3_can_batch:
+                    from vieneu.v3_turbo_serve import V3TurboBatchEngine
+                    if getattr(tts, "_v3_batch_engine", None) is None:
+                        tts._v3_batch_engine = V3TurboBatchEngine(tts.engine)
+                    v3_wavs = []
+                    for i in range(0, len(v3_chunks), v3_bs):
+                        if _STOP_EVENT.is_set():
+                            yield None, "⏹️ Đã dừng tạo giọng nói."
+                            return
+                        group = v3_chunks[i:i + v3_bs]
+                        yield None, f"⚡ v3 Turbo: lô {i // v3_bs + 1} ({len(group)} đoạn, batch size {v3_bs})..."
+                        reqs = [{"phonemes": phonemize_text_with_emotions(c), "ref_codes": ref_codes,
+                                 "voice_token_id": v3_voice_token_id} for c in group]
+                        v3_wavs.extend(tts._v3_batch_engine.generate_batch(
+                            reqs, temperature=temperature, max_new_frames=500))
+                    wav = join_audio_chunks(v3_wavs, sr=sr_v3, silence_p=0.15)
+                else:
+                    if mode_tab == "preset_mode":
+                        # Built-in default voice: drive the emotion path via the voice
+                        # name so v3turbo resolves the reserved token + fixed codes.
+                        wav = tts.infer(raw_text, voice=v_id,
+                                        temperature=temperature, max_chars=max_chars_chunk)
+                    else:
+                        # Voice cloning: emotion-tag path with the cloned ref codes.
+                        wav = tts.infer(raw_text, ref_codes=ref_codes,
+                                        temperature=temperature, max_chars=max_chars_chunk)
+            except Exception as e:
+                yield None, f"❌ Lỗi tổng hợp (v3 Turbo): {str(e)}"
+                return
+            if wav is None or len(wav) == 0:
+                yield None, "❌ Không sinh được audio nào."
+                return
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                sf.write(tmp.name, wav, sr_v3)
+                out_path_v3 = tmp.name
+            _dt = time.time() - _t0
+            _spd = f", Tốc độ: {len(wav)/sr_v3/_dt:.2f}x realtime" if _dt > 0 else ""
+            yield out_path_v3, f"✅ Hoàn tất! (v3 Turbo, Thời gian: {_dt:.2f}s{_spd})"
+            cleanup_gpu_memory()
+            return
+        # ========================== end v3 TURBO BRANCH ======================
+
         backend_name = "LMDeploy" if using_lmdeploy else "Standard"
 
         is_v2_turbo = "v2-Turbo" in (current_backbone or "")
@@ -1175,6 +1274,99 @@ _STOP_EVENT = threading.Event()
 
 # --- 3. CONVERSATION LOGIC ---
 
+def _synthesize_conversation_v3(lines, mapping, temperature, max_chars_chunk, silence_duration):
+    """v3 Turbo conversation: batch the WHOLE conversation at batch size 32.
+
+    Unlike the v2 path (sequential, one turn at a time), every turn is split into
+    chunks and ALL chunks across ALL turns are flattened into one request list, then
+    fed to the V3 batched engine in groups of 32 — regardless of which speaker each
+    chunk belongs to (each request carries its own speaker ref_codes + reserved
+    token). Wavs are reassembled per turn (in order) and joined with inter-turn
+    silence. Yields ``(audio_path, status)`` like the v2 path. 48 kHz.
+    """
+    global tts
+    from collections import defaultdict
+    from vieneu_utils.core_utils import split_text_into_chunks, join_audio_chunks
+    from vieneu_utils.phonemize_text import phonemize_text_with_emotions
+    from vieneu.v3_turbo_serve import V3TurboBatchEngine
+
+    sr = getattr(tts, "sample_rate", 48000)
+    t0 = time.time()
+
+    # Resolve each speaker → (ref_codes np, reserved token id), cached per speaker.
+    def _voice_for(spk_name):
+        cfg = mapping.get(spk_name.lower())
+        v_id = (cfg or {}).get('voice') or tts._default_voice
+        try:
+            vd = tts.get_preset_voice(v_id)
+        except Exception:
+            vd = tts.get_preset_voice(tts._default_voice)
+        rc = vd['codes']
+        if 'torch' in sys.modules:
+            import torch
+            if isinstance(rc, torch.Tensor):
+                rc = rc.cpu().numpy()
+        return np.asarray(rc), vd.get('reserved_id')
+
+    voice_cache = {}
+    reqs, req_line = [], []
+    for li, line in enumerate(lines):
+        key = line['speaker'].lower()
+        if key not in voice_cache:
+            voice_cache[key] = _voice_for(line['speaker'])
+        ref_codes, vtok = voice_cache[key]
+        chunks = split_text_into_chunks(line['text'], max_chars=max_chars_chunk) or [line['text']]
+        for c in chunks:
+            reqs.append({"phonemes": phonemize_text_with_emotions(c),
+                         "ref_codes": ref_codes, "voice_token_id": vtok})
+            req_line.append(li)
+
+    if not reqs:
+        yield None, "❌ Không có lời thoại để tổng hợp."
+        return
+
+    if getattr(tts, "_v3_batch_engine", None) is None:
+        tts._v3_batch_engine = V3TurboBatchEngine(tts.engine)
+
+    BS = 32
+    total_batches = (len(reqs) + BS - 1) // BS
+    wavs_flat = []
+    for bi, i in enumerate(range(0, len(reqs), BS)):
+        if _STOP_EVENT.is_set():
+            yield None, "⏹️ Đã dừng hội thoại."
+            return
+        group = reqs[i:i + BS]
+        yield None, f"⚡ v3 Turbo hội thoại: lô {bi + 1}/{total_batches} ({len(group)} đoạn, batch 32)..."
+        wavs_flat.extend(tts._v3_batch_engine.generate_batch(
+            group, temperature=temperature, max_new_frames=500))
+
+    # Reassemble per turn (in order), then join turns with inter-turn silence.
+    by_line = defaultdict(list)
+    for w, li in zip(wavs_flat, req_line):
+        by_line[li].append(w)
+
+    all_wavs = []
+    for li in range(len(lines)):
+        lw = join_audio_chunks(by_line[li], sr=sr, silence_p=0.15) if by_line[li] else None
+        if lw is None or len(lw) == 0:
+            continue
+        all_wavs.append(lw)
+        if li < len(lines) - 1 and silence_duration > 0:
+            all_wavs.append(np.zeros(int(sr * silence_duration), dtype=np.float32))
+
+    if not all_wavs:
+        yield None, "❌ Không thể tạo được âm thanh nào!"
+        return
+
+    yield None, "🪄 Đang ghép nối âm thanh..."
+    final_wav = np.concatenate(all_wavs)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+        sf.write(tmp.name, final_wav, sr)
+        elapsed = time.time() - t0
+        yield tmp.name, f"✅ Hoàn tất hội thoại! ({len(lines)} câu, {len(reqs)} đoạn, {elapsed:.1f}s, batch 32)"
+    cleanup_gpu_memory()
+
+
 def synthesize_conversation(
     script_text: str,
     *args
@@ -1236,6 +1428,12 @@ def synthesize_conversation(
             'ref_text': ''
         }
 
+    # 2b. v3 Turbo: batch toàn bộ hội thoại (bs=32), bất kể speaker thay đổi.
+    if "v3" in (current_backbone or "").lower():
+        yield from _synthesize_conversation_v3(
+            lines, mapping, temperature, max_chars_chunk, silence_duration
+        )
+        return
 
     # 3. Process Each Line
     all_wavs = []
@@ -1468,7 +1666,11 @@ with gr.Blocks(theme=theme, css=css, title="VieNeu-TTS", head=head_html) as demo
                     default_backbone = list(BACKBONE_CONFIGS.keys())[0]
                 
                 # Default parameters based on backbone
-                if "Turbo" in default_backbone:
+                if "v3" in default_backbone.lower():
+                    default_codec = "VieNeu-Codec"
+                    default_temp = 0.8
+                    default_text = DEFAULT_TEXT_V3
+                elif "Turbo" in default_backbone:
                     default_codec = "VieNeu-Codec"
                     default_temp = 0.4
                     default_text = DEFAULT_TEXT_TURBO
@@ -1520,9 +1722,10 @@ with gr.Blocks(theme=theme, css=css, title="VieNeu-TTS", head=head_html) as demo
             
             with gr.Row():
                 use_lmdeploy_cb = gr.Checkbox(
-                    value=True, 
+                    value=True,
                     label="🚀 Optimize with LMDeploy (Khuyên dùng cho NVIDIA GPU)",
-                    info="Tick nếu bạn dùng GPU để tăng tốc độ tổng hợp đáng kể."
+                    info="Tick nếu bạn dùng GPU để tăng tốc độ tổng hợp đáng kể.",
+                    visible="v3" not in default_backbone.lower(),  # v3 Turbo (PyTorch) không dùng LMDeploy
                 )
             
             
@@ -1555,6 +1758,14 @@ with gr.Blocks(theme=theme, css=css, title="VieNeu-TTS", head=head_html) as demo
             </div>
             """)
 
+            gr.Markdown(
+                "🆕 **VieNeu-TTS-v3-Turbo (early access)** đã được phát hành để **dùng thử trước** — "
+                "48kHz, **hỗ trợ Voice Cloning** (tính năng clone chỉ có từ **v3** trở lên; v1/v2 không hỗ trợ). "
+                "Bản **v3 đầy đủ** sẽ ra mắt trong **vài tuần tới**.\n\n"
+                "🎭 v3 Turbo đã **hỗ trợ các tag cảm xúc** `[cười]` `[hắng giọng]` `[thở dài]` "
+                "(chèn trực tiếp vào văn bản) — nhưng tính năng này **đang thử nghiệm và chưa thực sự ổn định**."
+            )
+
             btn_load = gr.Button("🔄 Tải Model", variant="primary")
             model_status = gr.Markdown("⏳ Chưa tải model.")
         
@@ -1574,11 +1785,20 @@ with gr.Blocks(theme=theme, css=css, title="VieNeu-TTS", head=head_html) as demo
                             with gr.TabItem("👤 Preset", id="preset_mode") as tab_preset:
                                 voice_select = gr.Dropdown(choices=[], value=None, label="Giọng mẫu", allow_custom_value=True)
                             
-                            with gr.TabItem("🦜 Voice Cloning", id="custom_mode") as tab_custom:
+                            # Voice cloning is only available on v3+ models. Hidden by
+                            # default and toggled on by on_backbone_change when a v3
+                            # model is selected.
+                            with gr.TabItem("🦜 Voice Cloning", id="custom_mode", visible=False) as tab_custom:
+                                gr.Markdown(
+                                    "ℹ️ **Voice Cloning chỉ hỗ trợ từ VieNeu-TTS v3 trở lên.** "
+                                    "Các phiên bản v1/v2 không hỗ trợ clone — hãy dùng giọng mẫu ở tab **Preset**."
+                                )
                                 with gr.Group(visible=True) as cloning_elements_group:
                                     custom_audio = gr.Audio(label="Audio giọng mẫu (3-5 giây) (.wav)", type="filepath")
                                     cloning_warning_msg = gr.Markdown(visible=False, elem_id="cloning-warning")
-                                    custom_text = gr.Textbox(label="Nội dung audio mẫu - vui lòng gõ đúng nội dung của audio mẫu - kể cả dấu câu vì model rất nhạy cảm với dấu câu (.,?!)")
+                                    # v3 clones from audio only — the reference transcript box
+                                    # is hidden for v3 (toggled by on_backbone_change).
+                                    custom_text = gr.Textbox(label="Nội dung audio mẫu - vui lòng gõ đúng nội dung của audio mẫu - kể cả dấu câu vì model rất nhạy cảm với dấu câu (.,?!)", visible=False)
                                     gr.Examples(
                                         examples=[
                                             [os.path.join(os.path.dirname(os.path.dirname(__file__)), "examples", "audio_ref", "example.wav"), "Ví dụ 2. Tính trung bình của dãy số."],
@@ -1676,10 +1896,10 @@ with gr.Blocks(theme=theme, css=css, title="VieNeu-TTS", head=head_html) as demo
                         info="Xử lý nhiều đoạn cùng lúc (chỉ áp dụng khi sử dụng GPU và đã cài đặt LMDeploy)"
                     )
                     max_batch_size_run = gr.Slider(
-                        minimum=1, 
-                        maximum=16, 
-                        value=4, 
-                        step=1, 
+                        minimum=1,
+                        maximum=32,
+                        value=4,
+                        step=1,
                         label="📊 Batch Size (Generation)",
                         info="Số lượng đoạn văn bản xử lý cùng lúc. Giá trị cao = nhanh hơn nhưng tốn VRAM hơn. Giảm xuống nếu gặp lỗi Out of Memory."
                     )
@@ -1744,11 +1964,12 @@ with gr.Blocks(theme=theme, css=css, title="VieNeu-TTS", head=head_html) as demo
 
         def on_backbone_change(choice):
             is_custom = (choice == "Custom Model")
+            is_v3 = "v3" in (choice or "").lower()  # voice cloning is v3+ only
             print(f"   🔄 Backbone changed to: {choice}")
             
             # 1. Device logic
             # Allow hardware acceleration (MPS/CUDA/Auto) for all GPU models AND Turbo (GGUF) models
-            is_hw_accel_supported = "(GPU)" in choice or "v2-Turbo" in choice or is_custom
+            is_hw_accel_supported = "(GPU)" in choice or "v2-Turbo" in choice or "v3" in choice.lower() or is_custom
             
             if is_hw_accel_supported:
                 dev_choices = get_available_devices()
@@ -1758,7 +1979,12 @@ with gr.Blocks(theme=theme, css=css, title="VieNeu-TTS", head=head_html) as demo
                 initial_dev = "CPU"
             
             # 2. Parameter logic
-            if "Turbo" in choice:
+            if is_v3:
+                # v3 Turbo uses its own MOSS codec (PyTorch); 0.8 khớp bản tham chiếu.
+                codec_update = gr.update(value="VieNeu-Codec", interactive=False)
+                text_update = gr.update(value=DEFAULT_TEXT_V3)
+                temp_update = gr.update(value=0.8)
+            elif "Turbo" in choice:
                 codec_update = gr.update(value="VieNeu-Codec", interactive=False)
                 text_update = gr.update(value=DEFAULT_TEXT_TURBO)
                 temp_update = gr.update(value=0.4)
@@ -1772,24 +1998,30 @@ with gr.Blocks(theme=theme, css=css, title="VieNeu-TTS", head=head_html) as demo
                 temp_update = gr.update(value=0.7)
                 
             return (
-                gr.update(visible=is_custom), 
-                codec_update, 
-                text_update, 
-                temp_update, 
+                gr.update(visible=is_custom),
+                codec_update,
+                text_update,
+                temp_update,
                 gr.update(choices=dev_choices, value=initial_dev),
-                gr.update(visible=True)
+                gr.update(visible=is_v3),   # cloning_elements_group
+                gr.update(visible=is_v3),   # tab_custom — clone tab only on v3+
+                gr.update(value=32 if is_v3 else 4),  # max_batch_size_run — v3 batches chunks
+                gr.update(visible=not is_v3),  # use_lmdeploy_cb — irrelevant for v3 (PyTorch, no LMDeploy)
             )
 
         backbone_select.change(
             on_backbone_change,
             inputs=[backbone_select],
             outputs=[
-                custom_model_group, 
-                codec_select, 
-                text_input, 
-                temperature_slider, 
+                custom_model_group,
+                codec_select,
+                text_input,
+                temperature_slider,
                 device_choice,
-                cloning_elements_group
+                cloning_elements_group,
+                tab_custom,
+                max_batch_size_run,
+                use_lmdeploy_cb,
             ]
         )
         
@@ -1831,11 +2063,13 @@ with gr.Blocks(theme=theme, css=css, title="VieNeu-TTS", head=head_html) as demo
 
         # --- Auto-adjust Temperature on Tab Switch ---
         conv_tab.select(
-            fn=lambda: gr.update(value=1.0),
+            fn=lambda bb: gr.update(value=0.8 if "v3" in (bb or "").lower() else 1.0),
+            inputs=backbone_select,
             outputs=temperature_slider
         )
         single_tab.select(
-            fn=lambda: gr.update(value=default_temp),
+            fn=lambda bb: gr.update(value=0.8 if "v3" in (bb or "").lower() else default_temp),
+            inputs=backbone_select,
             outputs=temperature_slider
         )
         

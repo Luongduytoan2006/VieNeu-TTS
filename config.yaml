@@ -11,10 +11,14 @@ backbone_configs:
     repo: pnnbao-ump/VieNeu-TTS-0.3B
     supports_streaming: false
     description: "⚡ Bản 0.3B tối ưu cho GPU, rất nhanh và chính xác"
+  "VieNeu-TTS-v3-Turbo (Thử nghiệm)":
+    repo: pnnbao-ump/VieNeu-TTS-v3-Turbo
+    supports_streaming: false
+    description: "🆕 v3 Turbo (early access) — 48kHz. Giọng mặc định dùng speaker token (ổn định hơn); Voice Cloning clone từ audio mẫu. Bản dùng thử trước; v3 đầy đủ sẽ ra mắt trong vài tuần tới."
   "VieNeu-TTS-v2-Turbo (CPU)":
     repo: pnnbao-ump/VieNeu-TTS-v2-Turbo-GGUF
     supports_streaming: true
-    description: "🚀 Turbo v2: Siêu nhanh, hỗ trợ multi-lingual, tối ưu tuyệt đối cho CPU & Thiết bị yếu"
+    description: "🚀 Turbo v2: Siêu nhanh, hỗ trợ multi-lingual, tối ưu cho CPU. (Không hỗ trợ Voice Cloning — dùng v3 trở lên để clone giọng.)"
 
 codec_configs:
   "NeuCodec (Distill)":
