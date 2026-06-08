@@ -12,7 +12,7 @@
     "homepage": "https://github.com/pnnbao97",
     "note": "Default voices for the v3 Turbo emotion checkpoint. Each preset carries a speaker reserved token (reserved_id, ids 13..42) plus fixed MOSS ref codes (T, n_vq). Voice cloning ignores reserved_id and uses the emotion-tag path instead."
   },
-  "default_voice": "Bình An",
+  "default_voice": "Ngọc Linh",
   "presets": {
     "Ngọc Lan": {
       "reserved_id": 13,
