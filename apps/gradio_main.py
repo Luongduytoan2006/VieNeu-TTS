@@ -2233,6 +2233,7 @@ with gr.Blocks(theme=theme, css=css, title="VieNeu-TTS", head=head_html) as demo
                     session_id_state],
             outputs=[audio_output, status_output, estimate_output]
         )
+        btn_generate_conv.click(lambda: gr.update(visible=False), outputs=[download_btn])
         btn_generate_conv.click(lambda: gr.update(interactive=True), outputs=btn_stop)
         conv_gen_event.then(lambda: gr.update(interactive=False), outputs=btn_stop)
 
@@ -2256,6 +2257,7 @@ with gr.Blocks(theme=theme, css=css, title="VieNeu-TTS", head=head_html) as demo
                     temperature_slider, max_chars_chunk_slider, session_id_state],
             outputs=[audio_output, status_output, estimate_output]
         )
+        btn_generate.click(lambda: gr.update(visible=False), outputs=[download_btn])
         btn_generate.click(lambda: gr.update(interactive=True), outputs=btn_stop)
         gen_event.then(lambda: gr.update(interactive=False), outputs=btn_stop)
 
