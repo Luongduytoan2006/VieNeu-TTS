@@ -43,7 +43,7 @@ for label, voice_id in tts.list_preset_voices():
     print(label, voice_id)
 
 # 2. Reading style: "tu_nhien" (natural) | "tin_tuc" (news) | "doc_truyen" (storytelling)
-audio = tts.infer("Bản tin sáng nay.", voice="Quang Sơn", style="tin_tuc")
+audio = tts.infer("Bản tin sáng nay.", voice="Phạm Tuyên", style="tin_tuc")
 
 # 3. Emotion / non-verbal cues — EXPERIMENTAL: [cười] [thở dài] [hắng giọng]
 audio = tts.infer("Nghe hay quá đi [cười].", voice="Trúc Ly")

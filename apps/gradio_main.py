@@ -923,25 +923,26 @@ def synthesize_speech(text: str, voice_choice: str, custom_audio, custom_text: s
                     wav = join_audio_chunks(v3_wavs, sr=sr_v3, silence_ps=gaps_to_silence(v3_gaps))
                 else:
                     # CPU (ONNX) hoặc GPU khi tắt batch: xử lý TUẦN TỰ từng đoạn.
-                    # Dùng infer_stream (yield 1 wav / đoạn) thay vì infer (chạy toàn
-                    # bộ trong 1 lần, im lặng) để báo cho người dùng đang xử lý đến
-                    # đoạn thứ mấy + ước tính thời gian còn lại — quan trọng trên CPU
-                    # vì mỗi đoạn có thể mất nhiều giây.
+                    # Gọi engine 1 lần / đoạn (giống nhánh batch nhưng tuần tự) để có
+                    # ĐÚNG 1 wav / đoạn -> khớp với v3_gaps khi join, đồng thời báo cho
+                    # người dùng đang xử lý đến đoạn nào + ước tính thời gian còn lại —
+                    # quan trọng trên CPU vì mỗi đoạn có thể mất nhiều giây.
+                    # (KHÔNG enumerate tts.infer(): infer() trả về 1 mảng đã ghép sẵn,
+                    #  lặp qua nó sẽ ra từng sample numpy.float32 -> len() ném lỗi.)
                     total_v3 = len(v3_chunks)
-                    # preset_mode → preset voice by name; voice cloning → clone from the
-                    # uploaded audio (denoised once inside infer_stream).
-                    stream_kwargs = ({"voice": v_id} if mode_tab == "preset_mode"
-                                     else {"ref_audio": custom_audio, "denoise": denoise_ref})
                     v3_wavs = []
                     chunk_durations = []
                     last_t = time.time()
-                    yield None, f"⏳ v3 Turbo: Đang xử lý đoạn 1/{total_v3}..."
-                    for i, chunk_wav in enumerate(tts.infer_stream(
-                            raw_text, style=style_key, temperature=temperature,
-                            max_chars=max_chars_chunk, **stream_kwargs)):
+                    for i, chunk in enumerate(v3_chunks):
                         if _STOP_EVENT.is_set():
                             yield None, "⏹️ Đã dừng tạo giọng nói."
                             return
+                        yield None, f"⏳ v3 Turbo: Đang xử lý đoạn {i + 1}/{total_v3}..."
+                        ph = phonemize_text_with_emotions(chunk)
+                        chunk_wav = tts.engine.infer(
+                            phonemes=ph, speaker_emb=v3_speaker_emb, ref_codes=ref_codes,
+                            style=style_key, use_ref_codes=True,
+                            temperature=temperature, max_new_frames=300)
                         now = time.time()
                         chunk_durations.append(now - last_t)
                         last_t = now
@@ -1737,13 +1738,11 @@ with gr.Blocks(theme=theme, css=css, title="VieNeu-TTS", head=head_html) as demo
         with gr.Group():
             with gr.Row():
                 # --- BACKBONE & CODEC DEFAULT LOGIC ---
-                # GPU users default to VieNeu-TTS-v2 (GPU); CPU-only users get v3 Turbo
-                # (the only CPU backbone). v2 (GPU) is registered solely when HAS_GPU.
-                if HAS_GPU and "VieNeu-TTS-v2 (GPU)" in BACKBONE_CONFIGS:
-                    default_backbone = "VieNeu-TTS-v2 (GPU)"
-                else:
+                # GPU users default to VieNeu-TTS-v3-Turbo (GPU); CPU-only users get v3 Turbo
+                # (the only CPU backbone). v3 (GPU) is registered solely when HAS_GPU.
+                if HAS_GPU and "VieNeu-TTS-v3-Turbo (Thử nghiệm)" in BACKBONE_CONFIGS:
                     default_backbone = "VieNeu-TTS-v3-Turbo (Thử nghiệm)"
-                if default_backbone not in BACKBONE_CONFIGS:
+                else:
                     default_backbone = list(BACKBONE_CONFIGS.keys())[0]
                 
                 # Default parameters based on backbone

@@ -112,7 +112,7 @@ from vieneu import Vieneu
 tts = Vieneu()
 
 # 1. Built-in voice by name — no reference clip needed
-audio = tts.infer("Xin chào, đây là VieNeu-TTS.", voice="Trúc Ly")
+audio = tts.infer("[cười] Trời ơi, cái giọng nó tự nhiên mà nó mượt mà dã man, nghe không khác gì người thật luôn. Giờ thì tha hồ mà quẩy content với cả kho giọng nói đa dạng, đủ mọi sắc thái biểu cảm. Mọi người bật loa lên rồi cùng trải nghiệm thử với mình nhé!", voice="Phạm Tuyên")
 tts.save(audio, "output.wav")
 
 # List the built-in voices
@@ -131,7 +131,7 @@ Pick how the text is read with `style` (default `"tu_nhien"`):
 | `"doc_truyen"` | Storytelling  |
 
 ```python
-audio = tts.infer("Bản tin sáng nay.", voice="Quang Sơn", style="tin_tuc")
+audio = tts.infer("Trận Caen là một trận đánh trong Chiến tranh Trăm Năm giữa Anh và Pháp diễn ra vào ngày 26 tháng 7 năm 1346 khi quân viễn chinh Anh dưới sự chỉ huy của Edward III tấn công thành Caen do quân Pháp nắm giữ.", voice="Phạm Tuyên", style="tin_tuc")
 ```
 
 ### Emotion cues (experimental)

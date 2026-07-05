@@ -122,7 +122,7 @@ Chọn cách đọc bằng `style` (mặc định `"tu_nhien"`):
 | `"doc_truyen"` | Kể chuyện      |
 
 ```python
-audio = tts.infer("Bản tin sáng nay.", voice="Quang Sơn", style="tin_tuc")
+audio = tts.infer("Bản tin sáng nay.", voice="Phạm Tuyên", style="tin_tuc")
 ```
 
 ### Tag cảm xúc (thử nghiệm)
