@@ -13,6 +13,11 @@ services:
       - hf-cache:/root/.cache/huggingface
       - ./outputs:/workspace/outputs
     environment:
+      # Unified server (vieneu-api): UI at "/", REST at "/api/v1", Swagger at "/docs".
+      - HOST=0.0.0.0
+      - PORT=7862
+      - VIENEU_API_MOUNT_UI=1
+      # Kept for the Gradio UI internals (share link auto-disabled on 0.0.0.0).
       - GRADIO_SERVER_NAME=0.0.0.0
       - GRADIO_SERVER_PORT=7862
       - PYTHONUNBUFFERED=1

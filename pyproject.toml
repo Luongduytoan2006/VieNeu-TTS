@@ -77,6 +77,8 @@ dependencies = [
     "PyYAML",               # gradio config.yaml
     "gradio>=5.49.1",       # web UI (vieneu-web)
     "perth>=0.2.0",         # optional audio watermark (skipped gracefully if absent)
+    "fastapi>=0.115.0",     # REST API (vieneu-api) — explicit, not via gradio transitively
+    "uvicorn>=0.30.0",      # ASGI server for the REST API
 ]
 
 [project.urls]
@@ -141,6 +143,7 @@ pythonpath = ["src"]
 [project.scripts]
 vieneu-web = "apps.gradio_main:main"
 vieneu-stream = "apps.web_stream:main"
+vieneu-api = "apps.api.server:main"
 
 [tool.setuptools]
 package-dir = {"" = "src", "apps" = "apps", "examples" = "examples"}

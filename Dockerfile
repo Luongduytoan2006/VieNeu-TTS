@@ -33,7 +33,11 @@ RUN uv python install 3.12 && uv sync --group gpu --python 3.12
 # runtime if the upstream entrypoint doesn't already read a HOST/PORT env var --
 # see entrypoint.sh.
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# Strip any Windows CRLF line endings before making it executable: a checkout on
+# Windows (autocrlf) turns the shebang into `#!/bin/bash\r`, which the Linux kernel
+# can't resolve -> "exec /entrypoint.sh: no such file or directory". sed makes the
+# build robust regardless of how the host checked the repo out.
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 EXPOSE 7862
 
 ENTRYPOINT ["/entrypoint.sh"]

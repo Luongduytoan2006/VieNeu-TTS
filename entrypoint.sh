@@ -1,9 +1,15 @@
 #!/bin/bash
 set -e
-# vieneu-web itself already reads GRADIO_SERVER_NAME/GRADIO_SERVER_PORT (see
-# apps/gradio_main.py) and auto-disables the public share link when bound to
-# 0.0.0.0 -- both are set via docker-compose.yml's environment section, not here.
-# Model weights auto-download from Hugging Face on first use (the vieneu SDK's own
-# behavior, not something this entrypoint needs to orchestrate) into HF_HOME, which
-# is volume-mounted so they persist across container restarts.
-exec uv run vieneu-web
+# Launch the unified server: FastAPI REST API (/api/v1) + Swagger (/docs) + the
+# Gradio UI mounted at "/" — ALL on ONE port. This matters for the Proxmox CT,
+# which only exposes a single port (7862) through nginx, so UI and API must share it.
+#
+# Config via env (set in docker-compose.yml):
+#   PORT                 -> listen port (default 8000; compose sets 7862)
+#   HOST                 -> bind address (default 0.0.0.0)
+#   VIENEU_API_MOUNT_UI  -> 1 to mount the Gradio UI at "/" (default 1)
+#
+# Device is auto-detected inside the app: CUDA -> PyTorch engine, CPU-only -> the
+# torch-free ONNX engine. Model weights auto-download from Hugging Face on first
+# use into HF_HOME (volume-mounted, so they persist across restarts).
+exec uv run vieneu-api

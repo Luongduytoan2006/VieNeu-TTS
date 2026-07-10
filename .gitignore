@@ -19,3 +19,8 @@ finetune/output/
 
 # Merged Models
 merged_models_cache/
+
+# Temp folders
+.ask/
+tmp/
+.claude/
