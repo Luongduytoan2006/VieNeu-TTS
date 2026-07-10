@@ -21,6 +21,9 @@ services:
       - HOST=0.0.0.0
       - PORT=7862
       - VIENEU_API_MOUNT_UI=1
+      # Served over HTTPS behind Cloudflare+nginx → make Gradio emit https:// URLs
+      # so the browser doesn't block audio as mixed content.
+      - VIENEU_FORCE_HTTPS=1
       - GRADIO_SERVER_NAME=0.0.0.0
       - GRADIO_SERVER_PORT=7862
       - PYTHONUNBUFFERED=1

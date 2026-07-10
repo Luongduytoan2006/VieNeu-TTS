@@ -47,6 +47,34 @@ logger = logging.getLogger("Vieneu.API")
 
 API_PREFIX = "/api/v1"
 
+
+class ForceHttpsSchemeMiddleware:
+    """Force ``scope["scheme"] = "https"`` so the mounted Gradio UI builds https://
+    asset URLs when we're served over HTTPS behind a proxy.
+
+    Cloudflare terminates TLS and calls nginx over plain HTTP, so nginx's
+    ``X-Forwarded-Proto $scheme`` reaches us as ``http`` and the real https is
+    lost — Gradio then hands the browser http:// audio URLs on an https page and
+    the browser blocks them (mixed content: player stuck at 0:00, download fails).
+    Enabled only when ``VIENEU_FORCE_HTTPS=1`` (set in the server compose), so
+    local http development is unaffected. Honors an explicit http override via
+    X-Forwarded-Proto in case someone really is on http.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http":
+            xfp = b""
+            for name, value in scope.get("headers") or []:
+                if name == b"x-forwarded-proto":
+                    xfp = value.strip().lower()
+            if xfp != b"http":  # force https unless the proxy explicitly said http
+                scope = dict(scope)
+                scope["scheme"] = "https"
+        await self.app(scope, receive, send)
+
 app = FastAPI(
     title="VieNeu-TTS API",
     version="1.0.0",
@@ -59,6 +87,13 @@ app = FastAPI(
     redoc_url="/redoc",
     openapi_url="/openapi.json",
 )
+
+# When served over HTTPS behind Cloudflare+nginx, force the request scheme to https
+# so Gradio emits https:// asset URLs (see ForceHttpsSchemeMiddleware). Off for
+# plain local http unless VIENEU_FORCE_HTTPS=1.
+if os.getenv("VIENEU_FORCE_HTTPS", "0") == "1":
+    app.add_middleware(ForceHttpsSchemeMiddleware)
+    logger.info("🔒 ForceHttpsScheme middleware enabled (VIENEU_FORCE_HTTPS=1).")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
