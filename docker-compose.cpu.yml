@@ -24,6 +24,13 @@ services:
       - GRADIO_SERVER_NAME=0.0.0.0
       - GRADIO_SERVER_PORT=7862
       - PYTHONUNBUFFERED=1
+      # v3 Turbo synthesis is autoregressive (one frame at a time), so ONNX Runtime's
+      # default "use every core" hurts: thread-sync overhead dominates. Measured on the
+      # 32-CPU CT, 1 thread (0.39x RTF) beat 16 threads (0.19x) — 2x faster. Pin to 1.
+      - OMP_NUM_THREADS=1
+      - ORT_NUM_THREADS=1
+      - MKL_NUM_THREADS=1
+      - OPENBLAS_NUM_THREADS=1
     restart: unless-stopped
 
 volumes:
