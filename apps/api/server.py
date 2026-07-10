@@ -273,7 +273,12 @@ def main() -> None:
     host = os.getenv("HOST", os.getenv("GRADIO_SERVER_NAME", "0.0.0.0"))
     port = int(os.getenv("PORT", os.getenv("API_PORT", "8000")))
     logger.info("🚀 VieNeu-TTS API on http://%s:%d  (docs: /docs, api: %s)", host, port, API_PREFIX)
-    uvicorn.run(app, host=host, port=port)
+    # Behind a reverse proxy (nginx/Cloudflare) the app is reached over HTTPS but
+    # uvicorn only sees plain HTTP from the proxy. Trust X-Forwarded-Proto/-For so
+    # Gradio builds https:// asset URLs — otherwise the mounted UI tells the browser
+    # to fetch audio over http:// on an https page and it's blocked as mixed content
+    # (symptom: audio player stuck at 0:00, download fails, but /tts still works).
+    uvicorn.run(app, host=host, port=port, proxy_headers=True, forwarded_allow_ips="*")
 
 
 if __name__ == "__main__":
