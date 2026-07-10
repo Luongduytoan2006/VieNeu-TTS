@@ -49,16 +49,19 @@ API_PREFIX = "/api/v1"
 
 
 class ForceHttpsSchemeMiddleware:
-    """Force ``scope["scheme"] = "https"`` so the mounted Gradio UI builds https://
-    asset URLs when we're served over HTTPS behind a proxy.
+    """Rewrite the ``x-forwarded-proto`` header to ``https`` so the mounted Gradio
+    UI builds https:// asset URLs when we're served over HTTPS behind a proxy.
 
-    Cloudflare terminates TLS and calls nginx over plain HTTP, so nginx's
-    ``X-Forwarded-Proto $scheme`` reaches us as ``http`` and the real https is
-    lost — Gradio then hands the browser http:// audio URLs on an https page and
-    the browser blocks them (mixed content: player stuck at 0:00, download fails).
-    Enabled only when ``VIENEU_FORCE_HTTPS=1`` (set in the server compose), so
-    local http development is unaffected. Honors an explicit http override via
-    X-Forwarded-Proto in case someone really is on http.
+    Cloudflare terminates TLS and calls nginx over plain HTTP, so nginx sends
+    ``X-Forwarded-Proto: http`` to us and the real https is lost. Gradio builds its
+    root_url from this header (gradio/route_utils.py: only upgrades to https when
+    ``x-forwarded-proto == "https"``), so it hands the browser http:// audio URLs
+    on an https page and the browser blocks them as mixed content (player stuck at
+    0:00, download fails). We set the header to https here.
+
+    Enabled only when ``VIENEU_FORCE_HTTPS=1`` (server compose), so local http dev
+    is unaffected. We overwrite the header (Cloudflare's edge already spoke https to
+    the user); set VIENEU_FORCE_HTTPS=0 if you ever serve this over plain http.
     """
 
     def __init__(self, app):
@@ -66,13 +69,15 @@ class ForceHttpsSchemeMiddleware:
 
     async def __call__(self, scope, receive, send):
         if scope.get("type") == "http":
-            xfp = b""
-            for name, value in scope.get("headers") or []:
-                if name == b"x-forwarded-proto":
-                    xfp = value.strip().lower()
-            if xfp != b"http":  # force https unless the proxy explicitly said http
-                scope = dict(scope)
-                scope["scheme"] = "https"
+            scope = dict(scope)
+            headers = [
+                (n, v) for (n, v) in (scope.get("headers") or [])
+                if n.lower() not in (b"x-forwarded-proto", b"x-forwarded-scheme")
+            ]
+            headers.append((b"x-forwarded-proto", b"https"))
+            headers.append((b"x-forwarded-scheme", b"https"))
+            scope["headers"] = headers
+            scope["scheme"] = "https"
         await self.app(scope, receive, send)
 
 app = FastAPI(
