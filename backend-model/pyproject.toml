@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vieneu-backend-model"
+version = "1.0.0"
+description = "VieNeu-TTS model-server (GPU/AI tier) — owns the v3 Turbo model, synthesizes audio, stores to R2."
+readme = "README.md"
+requires-python = ">=3.10"
+# Core = torch-free CPU/ONNX synthesis + the model-server HTTP API + R2 storage.
+# GPU adds torch/transformers via the [gpu] extra (the Dockerfile.gpu installs it).
+dependencies = [
+    "sea-g2p>=0.7.14",          # phonemizer (Rust, torch-free)
+    "onnxruntime>=1.20.0",      # v3 transformers + MOSS codec on CPU
+    "numpy",
+    "soundfile",                # audio I/O
+    "soxr",                     # resampling for voice cloning
+    "tokenizers>=0.20",         # phoneme tokenizer
+    "huggingface_hub",          # fetch ONNX / config / tokenizer / voices
+    "perth>=0.2.0",             # optional audio watermark (skipped if absent)
+    "fastapi>=0.115.0",         # model-server HTTP API (/model/v1)
+    "uvicorn>=0.30.0",          # ASGI server
+    "python-multipart>=0.0.9",  # multipart upload for voice enrollment
+    "boto3>=1.34",              # Cloudflare R2 (S3-compatible) storage
+]
+
+[project.optional-dependencies]
+# GPU path: PyTorch v3 Turbo engine + MOSS codec (loaded via transformers
+# trust_remote_code). The v3 Turbo engine does NOT use librosa/neucodec (those were
+# for the legacy v1/v2 backends we removed), and reference loading falls back to
+# soundfile+soxr — so we keep this lean to avoid the numba/llvmlite build wall.
+gpu = [
+    "torch",
+    "torchaudio",
+    "transformers",
+    "accelerate",
+    "safetensors",
+]
+
+[project.scripts]
+vieneu-model-server = "model_server.app:main"
+
+[tool.uv]
+index-strategy = "unsafe-best-match"
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+
+[tool.uv.sources]
+torch = [{ index = "pytorch", marker = "sys_platform != 'darwin'" }]
+torchaudio = [{ index = "pytorch", marker = "sys_platform != 'darwin'" }]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vieneu*", "vieneu_utils*", "model_server*"]
+
+[tool.setuptools.package-data]
+vieneu = ["assets/*.json"]

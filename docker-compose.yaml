@@ -1,30 +1,39 @@
-# DEFAULT compose = the GPU model-server (owns the model + storage).
-# Run this on the machine that has the GPU:
+# ── VieNeu-TTS — full stack (both tiers on one machine) ──────────────────────
+# Boots the GPU model-server (backend-model), the CPU API (backend-vps), and
+# Postgres, on one shared network. Use this to run/verify the whole system on a
+# machine that has an NVIDIA GPU:
+#
 #   docker compose up -d --build
 #
-# It exposes the model-server on :9000 (the CPU backend — docker-compose.vps.yaml —
-# calls it). Audio is written to the storage volume and served back by URL.
+# Public API:  http://localhost:7862/docs   ·   /api/v1
+# Model API:   http://localhost:9000/model/v1  (internal; exposed for debugging)
+#
+# In the SPLIT production deploy the two tiers run on different machines:
+#   • GPU box  → `docker compose -f docker-compose.yaml up -d --build model-server db`
+#                (or just the model-server), exposed via a tunnel on :9000
+#   • CPU VPS  → run backend-vps alone (Dockerfile.vps) with MODEL_SERVER_URL set
+#                to the GPU tunnel URL.
+# Both read their own backend-*/.env for secrets (R2, MODEL_API_KEY, DB).
+
 services:
+  # GPU / AI tier — owns the model, stores audio to R2.
   model-server:
     build:
-      context: .
+      context: ./backend-model
       dockerfile: Dockerfile.gpu
     image: vieneu-model:gpu
     container_name: vieneu-model-server
+    env_file:
+      - ./backend-model/.env
+    environment:
+      - HOST=0.0.0.0
+      - PORT=9000
     ports:
       - "9000:9000"
     volumes:
       - hf-cache:/root/.cache/huggingface
-      - storage:/workspace/.ask/storage          # generated audio (local backend)
-    environment:
-      - HOST=0.0.0.0
-      - PORT=9000
-      - MODEL_API_KEY=${MODEL_API_KEY:-change-me-secret}
-      - MODEL_SERVER_PUBLIC_URL=${MODEL_SERVER_PUBLIC_URL:-http://localhost:9000}
-      - STORAGE_BACKEND=local
-      - STORAGE_LOCAL_DIR=/workspace/.ask/storage
-      - PYTHONUNBUFFERED=1
-    # GPU passthrough — the reason this compose is separate from the CPU one.
+    # GPU passthrough (needs NVIDIA Container Toolkit). Remove this block on a
+    # CPU-only host → device=auto falls back to ONNX/CPU.
     deploy:
       resources:
         reservations:
@@ -34,6 +43,47 @@ services:
               capabilities: [gpu]
     restart: unless-stopped
 
+  # Postgres — durable jobs for the CPU tier.
+  db:
+    image: postgres:16-alpine
+    container_name: vieneu-pg
+    environment:
+      - POSTGRES_USER=vieneu
+      - POSTGRES_PASSWORD=vieneu
+      - POSTGRES_DB=vieneu
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vieneu"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # CPU / logic tier — public API, forwards synthesis to model-server.
+  be:
+    build:
+      context: ./backend-vps
+      dockerfile: Dockerfile.vps
+    image: vieneu-be:cpu
+    container_name: vieneu-be
+    depends_on:
+      db:
+        condition: service_healthy
+      model-server:
+        condition: service_started
+    env_file:
+      - ./backend-vps/.env
+    environment:
+      - HOST=0.0.0.0
+      - PORT=7862
+      # Reach the model-server + db by their compose service names on the shared net.
+      - MODEL_SERVER_URL=http://model-server:9000
+      - VIENEU_DATABASE_URL=postgresql+psycopg://vieneu:vieneu@db:5432/vieneu
+    ports:
+      - "7862:7862"
+    restart: unless-stopped
+
 volumes:
   hf-cache:
-  storage:
+  pgdata:
