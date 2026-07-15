@@ -26,6 +26,9 @@ def _load_dotenv(path: Path) -> None:
 
 _load_dotenv(_ROOT / ".env")
 
+# Ensure the data dir exists (default SQLite lives here).
+(_ROOT / "data").mkdir(parents=True, exist_ok=True)
+
 
 class Settings:
     # ── Public API server ────────────────────────────────────────────────────
@@ -40,9 +43,11 @@ class Settings:
     MODEL_API_KEY: str = os.getenv("MODEL_API_KEY", "dev-secret-key")
 
     # ── Database (durable jobs) ──────────────────────────────────────────────
+    # Postgres in production; SQLite (default) so the VPS can run with just `uv`,
+    # no extra container. e.g. postgresql+psycopg://user:pass@host:5432/db
     DATABASE_URL: str = os.getenv(
         "VIENEU_DATABASE_URL",
-        "postgresql+psycopg://vieneu:vieneu@127.0.0.1:5433/vieneu",
+        f"sqlite:///{(_ROOT / 'data' / 'vieneu.db').as_posix()}",
     )
 
     # ── Synthesis defaults (forwarded to the model-server) ───────────────────

@@ -20,11 +20,20 @@ class Base(DeclarativeBase):
     pass
 
 
-engine = create_engine(
-    settings.DATABASE_URL,
-    pool_pre_ping=True,   # survive Postgres restarts / idle drops
-    future=True,
-)
+def _make_engine():
+    """Build the engine. Supports Postgres (production) and SQLite (zero-infra:
+    lets the VPS run with just ``uv``, no Postgres container). SQLite needs
+    ``check_same_thread=False`` because job workers run in threads."""
+    url = settings.DATABASE_URL
+    if url.startswith("sqlite"):
+        return create_engine(
+            url, future=True,
+            connect_args={"check_same_thread": False},
+        )
+    return create_engine(url, pool_pre_ping=True, future=True)
+
+
+engine = _make_engine()
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, class_=Session)
 
 
