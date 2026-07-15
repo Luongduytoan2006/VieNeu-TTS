@@ -1,0 +1,30 @@
+# Model-server image (GPU) — owns the model. For the split (PA3) architecture:
+# this container loads VieNeu-TTS v3 Turbo on the GPU, synthesizes audio, stores
+# it (local disk / R2 later), and returns a URL. The CPU backend calls it over HTTP.
+#
+# device=auto → PyTorch/CUDA here (GPU present). Falls back to ONNX/CPU if no GPU,
+# so the same image also runs on a CPU box for testing.
+FROM nvidia/cuda:12.8.0-runtime-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    HF_HOME=/root/.cache/huggingface
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.12 python3.12-dev libsndfile1 libgomp1 build-essential curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:${PATH}"
+
+WORKDIR /workspace
+COPY . .
+
+# GPU stack: torch+cu128 + all model deps (voice cloning's speaker encoder needs
+# torch/torchaudio anyway).
+RUN uv python install 3.12 && uv sync --group gpu --python 3.12
+
+EXPOSE 9000
+CMD ["uv", "run", "python", "-m", "vieneu_model_server.app"]

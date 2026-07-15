@@ -1,0 +1,39 @@
+# DEFAULT compose = the GPU model-server (owns the model + storage).
+# Run this on the machine that has the GPU:
+#   docker compose up -d --build
+#
+# It exposes the model-server on :9000 (the CPU backend — docker-compose.vps.yaml —
+# calls it). Audio is written to the storage volume and served back by URL.
+services:
+  model-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    image: vieneu-model:gpu
+    container_name: vieneu-model-server
+    ports:
+      - "9000:9000"
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+      - storage:/workspace/.ask/storage          # generated audio (local backend)
+    environment:
+      - HOST=0.0.0.0
+      - PORT=9000
+      - MODEL_API_KEY=${MODEL_API_KEY:-change-me-secret}
+      - MODEL_SERVER_PUBLIC_URL=${MODEL_SERVER_PUBLIC_URL:-http://localhost:9000}
+      - STORAGE_BACKEND=local
+      - STORAGE_LOCAL_DIR=/workspace/.ask/storage
+      - PYTHONUNBUFFERED=1
+    # GPU passthrough — the reason this compose is separate from the CPU one.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  hf-cache:
+  storage:

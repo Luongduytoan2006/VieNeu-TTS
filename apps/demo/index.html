@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>VieNeu Voice Studio</title>
+<link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="hero">
+      <div class="orb" id="orb"><span class="orb-core"></span></div>
+      <div class="hero-txt">
+        <h1>VieNeu <span>Voice Studio</span></h1>
+        <p class="sub">Tổng hợp giọng nói tiếng Việt · 48&nbsp;kHz · bất đồng bộ theo job</p>
+        <p class="status-pill" id="healthPill">● đang kết nối…</p>
+      </div>
+    </header>
+
+    <nav class="tabs">
+      <button class="tab active" data-tab="synth">🔊 Tạo giọng nói</button>
+      <button class="tab" data-tab="clone">🎙️ Nạp giọng mới</button>
+    </nav>
+
+    <!-- ── Synthesis ── -->
+    <section class="panel active" id="tab-synth">
+      <label class="lbl">Văn bản</label>
+      <textarea id="text" rows="5" placeholder="Nhập văn bản tiếng Việt… có thể chèn [cười], [thở dài], [hắng giọng]">Xin chào, đây là giọng nói được tạo bởi VieNeu Voice Studio. Chúc bạn một ngày tốt lành.</textarea>
+
+      <div class="row">
+        <div class="field">
+          <label class="lbl">Giọng</label>
+          <select id="voice"></select>
+        </div>
+        <div class="field">
+          <label class="lbl">Phong cách</label>
+          <select id="style"></select>
+        </div>
+        <div class="field narrow">
+          <label class="lbl">Nhiệt độ <span id="tempVal">0.8</span></label>
+          <input type="range" id="temp" min="0.1" max="1.5" step="0.05" value="0.8" />
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn primary" id="genBtn">Tạo giọng nói</button>
+        <button class="btn ghost" id="cancelBtn" disabled>Hủy</button>
+      </div>
+
+      <div class="progress-wrap" id="progWrap" hidden>
+        <div class="progress-head">
+          <span id="progLabel">Đang xử lý…</span>
+          <span id="progPct">0%</span>
+        </div>
+        <div class="bar"><div class="bar-fill" id="barFill"></div></div>
+        <div class="job-meta" id="jobMeta"></div>
+      </div>
+
+      <div class="result" id="result" hidden>
+        <audio id="player" controls></audio>
+        <a class="btn download" id="dlBtn" download>⬇ Tải xuống WAV</a>
+      </div>
+    </section>
+
+    <!-- ── Voice cloning ── -->
+    <section class="panel" id="tab-clone">
+      <label class="lbl">Tên giọng mới</label>
+      <input type="text" id="vName" placeholder="VD: Giọng của tôi" />
+
+      <label class="lbl">File audio mẫu (3–8 giây)</label>
+      <input type="file" id="vFile" accept="audio/*" />
+
+      <div class="row">
+        <div class="field">
+          <label class="lbl">Mô tả</label>
+          <input type="text" id="vDesc" placeholder="tùy chọn" />
+        </div>
+        <div class="field narrow">
+          <label class="lbl">Giới tính</label>
+          <input type="text" id="vGender" placeholder="Nam/Nữ" />
+        </div>
+      </div>
+
+      <button class="btn primary" id="cloneBtn">Phân tích & thêm giọng</button>
+      <p class="clone-msg" id="cloneMsg"></p>
+
+      <h3 class="list-title">Giọng hiện có</h3>
+      <ul class="voice-list" id="voiceList"></ul>
+    </section>
+
+    <footer>VieNeu-TTS · demo khách hàng · gọi trực tiếp <code>/api/v1</code> · <a href="/docs" target="_blank">Swagger</a></footer>
+  </div>
+  <script src="./app.js"></script>
+</body>
+</html>

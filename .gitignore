@@ -12,6 +12,13 @@ wheels/
 .xpu_venv
 outputs/
 .env
+.env.*
+!.env.example
+
+# Runtime-generated data (audio output, enrolled voices, sqlite, custom voices)
+data/
+*.db
+*.sqlite3
 
 # Finetune Data & Checkpoints
 finetune/dataset/
