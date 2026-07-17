@@ -100,6 +100,26 @@ class Engine:
     def voice_meta(self, vid: str) -> dict:
         return (self._tts._preset_voices.get(vid, {}) or {}) if self._tts else {}
 
+    def export_voice(self, vid: str) -> Optional[dict]:
+        """Serialize 1 giọng → dict JSON-safe (speaker_emb + codes dạng list).
+
+        Dùng để 'lôi giọng ra ngoài': gửi sang máy GPU ephemeral (SCP JSON vài KB)
+        hoặc lưu DB. Format y hệt ``save_voices`` cho 1 giọng nên nạp lại bằng
+        ``infer(voice=<dict>)`` chạy ngay, KHÔNG cần audio gốc / enroll lại.
+        """
+        v = self._tts._preset_voices.get(vid) if self._tts else None
+        if not isinstance(v, dict):
+            return None
+        emb, codes = v.get("speaker_emb"), v.get("codes")
+        return {
+            "description": v.get("description", ""),
+            "gender": v.get("gender", ""),
+            "style": v.get("style", DEFAULT_STYLE),
+            "speaker_emb": None if emb is None
+            else [round(float(x), 6) for x in np.asarray(emb).reshape(-1)],
+            "codes": None if codes is None else np.asarray(codes, dtype=int).tolist(),
+        }
+
     # ── Chunk + synth từng chunk (để báo % tiến độ) ──────────────────────────
     def split_chunks(self, text: str, max_chars: int):
         from vieneu_utils.phonemize_text import normalize_to_chunks_v3_with_gaps
@@ -123,6 +143,12 @@ class Engine:
         with self._infer_lock:
             self._tts.add_voice(name, ref_audio_path, denoise=denoise,
                                 description=description, gender=gender, style=style, save=False)
+            # Đánh dấu giọng clone (chỉ có trong RAM VPS) để phân biệt với preset
+            # bundle. Dùng ở: voices.py (source=custom) + gpu_vastai (serialize gửi
+            # GPU). Chỉ là cờ RAM — save_voices/export_voice không serialize key này.
+            v = self._tts._preset_voices.get(name)
+            if isinstance(v, dict):
+                v["_custom"] = True
 
     def remove(self, name: str) -> None:
         if self._tts:

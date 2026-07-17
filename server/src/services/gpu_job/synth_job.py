@@ -43,7 +43,11 @@ def main():
     ap.add_argument("--out", default="/workspace/out.wav")
     ap.add_argument("--text-file", default=None)
     ap.add_argument("--voice", default=None, help="ten voice preset; bo trong = default")
+    ap.add_argument("--voice-file", default=None,
+                    help="JSON dict giong clone {speaker_emb, codes, style}; uu tien hon --voice")
     ap.add_argument("--style", default="tu_nhien")
+    ap.add_argument("--temperature", type=float, default=0.8)
+    ap.add_argument("--max-chars", type=int, default=256)
     args = ap.parse_args()
 
     text = DEFAULT_TEXT
@@ -72,9 +76,26 @@ def main():
 
     # --- infer ---
     t2 = time.time()
-    kw = {"style": args.style, "apply_watermark": False}
-    if args.voice:
+    kw = {
+        "style": args.style, "apply_watermark": False,
+        "temperature": args.temperature, "max_chars": args.max_chars,
+    }
+    # Giong clone (custom): nap TU DICT — khong can audio goc, khong enroll lai.
+    if args.voice_file:
+        import numpy as np
+        with open(args.voice_file, encoding="utf-8") as f:
+            rec = json.load(f)
+        kw["voice"] = {
+            "speaker_emb": np.asarray(rec["speaker_emb"], dtype=np.float32),
+            "codes": None if rec.get("codes") is None else np.asarray(rec["codes"], dtype=np.int64),
+            "style": rec.get("style", args.style),
+        }
+        result["voice_src"] = "clone_dict"
+    elif args.voice:
         kw["voice"] = args.voice
+        result["voice_src"] = "preset"
+    else:
+        result["voice_src"] = "default"
     audio = tts.infer(text, **kw)
     result["t_infer_s"] = round(time.time() - t2, 2)
 

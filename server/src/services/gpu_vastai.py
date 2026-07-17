@@ -249,11 +249,14 @@ class VastAIClient:
 
     # ── Bước cao cấp: đưa code lên + chạy synth + tải WAV về ───────────────────
     def setup_and_synth(self, text: str, voice: Optional[str], style: str,
-                        out_wav: Path) -> dict:
+                        out_wav: Path, *, temperature: float = 0.8,
+                        max_chars: int = 256, voice_rec: Optional[dict] = None) -> dict:
         """SCP code+script → pip deps → chạy synth_job → tải WAV về ``out_wav``.
 
         Trả RESULT_JSON (timing + audio_sec + sample_rate). Truyền text qua file để
-        tránh giới hạn/escape khi nhét vào lệnh SSH.
+        tránh giới hạn/escape khi nhét vào lệnh SSH. ``voice_rec`` = dict giọng đã
+        serialize (speaker_emb + codes) — máy GPU nạp TỪ DICT nên giọng clone (chỉ
+        có trong RAM VPS) vẫn dùng được, KHÔNG cần audio gốc.
         """
         import json
 
@@ -267,11 +270,18 @@ class VastAIClient:
             raise VastAIError(f"Máy không ra được HuggingFace (code={hf.stdout.strip()!r}) "
                               f"— bỏ máy này, thử máy khác.")
 
-        # 1. SCP code engine + synth_job + text lên máy.
+        # 1. SCP code engine + synth_job + text (+ giọng clone) lên máy.
         text_local = out_wav.parent / f"{out_wav.stem}.txt"
         text_local.parent.mkdir(parents=True, exist_ok=True)
         text_local.write_text(text, encoding="utf-8")
-        self.scp_up(list(CODE_DIRS) + [SYNTH_JOB, text_local])
+        uploads = list(CODE_DIRS) + [SYNTH_JOB, text_local]
+        # Giọng clone: serialize ra JSON vài KB rồi SCP lên (không gửi audio gốc).
+        voice_local = None
+        if voice_rec is not None:
+            voice_local = out_wav.parent / f"{out_wav.stem}.voice.json"
+            voice_local.write_text(json.dumps(voice_rec, ensure_ascii=False), encoding="utf-8")
+            uploads.append(voice_local)
+        self.scp_up(uploads)
 
         # 2. Cài deps tối thiểu (torch có sẵn trong image).
         setup = self.ssh(f"cd /workspace && pip install -q {PIP_DEPS} 2>&1 | tail -3",
@@ -279,10 +289,17 @@ class VastAIClient:
         if setup.returncode != 0:
             raise VastAIError(f"pip cài deps lỗi (rc={setup.returncode}): {setup.stdout[-200:]}")
 
-        # 3. Chạy synth_job.py → in RESULT_JSON.
-        voice_arg = f'--voice "{voice}"' if voice else ""
+        # 3. Chạy synth_job.py → in RESULT_JSON. Giọng clone (voice_rec) ưu tiên
+        #    hơn preset name; truyền đủ temperature/max_chars như CPU.
+        if voice_local is not None:
+            voice_arg = f'--voice-file /workspace/{voice_local.name}'
+        elif voice:
+            voice_arg = f'--voice "{voice}"'
+        else:
+            voice_arg = ""
         cmd = (f"cd /workspace && PYTHONPATH=/workspace HF_HUB_ENABLE_HF_TRANSFER=0 "
                f'python synth_job.py --out /workspace/out.wav --style {style} '
+               f'--temperature {temperature} --max-chars {max_chars} '
                f'--text-file /workspace/{text_local.name} {voice_arg}')
         run = self.ssh(cmd, timeout=settings.VAST_JOB_TIMEOUT)
         result = None
@@ -339,7 +356,18 @@ def run(job) -> None:
         job.progress = 30.0
         job.touch()
 
-        result = client.setup_and_synth(job.text, job.voice, job.style, out_wav)
+        # Nếu là giọng clone (custom, chỉ có trong RAM VPS) → serialize gửi lên GPU.
+        # Preset (đóng gói trong JSON bundle của package) thì để synth_job tự có.
+        voice_rec = None
+        if job.voice:
+            from ..engine import engine
+            meta = engine.voice_meta(job.voice)
+            if isinstance(meta, dict) and meta.get("_custom"):
+                voice_rec = engine.export_voice(job.voice)
+
+        result = client.setup_and_synth(
+            job.text, job.voice, job.style, out_wav,
+            temperature=job.temperature, max_chars=job.max_chars, voice_rec=voice_rec)
         if job.cancel.is_set():
             job.status = CANCELLED
             job.touch()
