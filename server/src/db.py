@@ -1,7 +1,7 @@
 """DB — kết nối PostgreSQL (psycopg v3 + connection pool).
 
 Deploy chỉ cần đổi ``DATABASE_URL`` trong ``.env``. Dev mặc định trỏ Postgres
-Docker cổng 7432 (xem ``docker-compose.pg.yaml``). Dùng 1 pool dùng chung an toàn
+cổng 7432 (xem ``docker-compose.dev.yaml``). Dùng 1 pool dùng chung an toàn
 đa luồng (job chạy ở nhiều thread) — mượn/trả connection qua ``with connect()``.
 
 2 bảng, CẢ HAI đều có ``user_ref`` để mỗi người dùng có kho riêng:

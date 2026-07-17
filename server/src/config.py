@@ -57,8 +57,8 @@ class Settings:
     MAX_NEW_FRAMES: int = int(os.getenv("VIENEU_MAX_NEW_FRAMES", "300"))
 
     # ── Database (PostgreSQL — nguồn sự thật cho giọng custom + jobs) ─────────
-    # Deploy chỉ cần đổi DATABASE_URL. Mặc định trỏ Postgres Docker cổng 7432
-    # (docker-compose.pg.yaml). Dạng: postgresql://user:pass@host:port/dbname
+    # Deploy chỉ cần đổi DATABASE_URL. Mặc định trỏ Postgres dev cổng 7432
+    # (docker-compose.dev.yaml). Dạng: postgresql://user:pass@host:port/dbname
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL", "postgresql://vieneu:vieneu@localhost:7432/vieneu")
 
