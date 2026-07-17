@@ -1,7 +1,8 @@
-"""voices — CRUD giọng (list/get + clone-from-upload + delete), in-process.
+"""voices — CRUD giọng (list/get + clone-from-upload + delete), DB-backed.
 
-Gọi thẳng vào ``src.engine`` (gốc tác giả). Enroll: ghi file audio tạm → engine
-denoise + trích đặc trưng → thêm vào danh sách preset của model đang chạy.
+Giọng nằm ở DB (``repositories/voices_repo``) — nguồn sự thật, sống qua restart.
+Enroll: ghi audio tạm → ``engine.extract_reference`` (denoise + trích emb+codes)
+→ LƯU DB (source=custom). Đọc/list/delete đều qua repo, KHÔNG tra RAM engine.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ from typing import List, Optional
 
 from ..config import settings
 from ..engine import engine
+from ..repositories import voices_repo as repo
 from ..schemas import DEFAULT_STYLE, VoiceInfo, VoicesResponse
 
 logger = logging.getLogger("Vieneu.Voices")
@@ -29,38 +31,37 @@ class VoiceError(Exception):
 
 
 # ── Read ──────────────────────────────────────────────────────────────────────
-def _to_info(vid: str, label: str, meta: dict, default: Optional[str]) -> VoiceInfo:
+def _to_info(rec: dict, default_id: Optional[str]) -> VoiceInfo:
+    vid = rec["id"]
+    label = f"{vid} — {rec['description']}" if rec.get("description") else vid
     return VoiceInfo(
-        id=vid, label=label, gender=meta.get("gender") or None,
-        style=meta.get("style", DEFAULT_STYLE),
-        source="custom" if meta.get("_custom") else "preset",
-        is_default=(vid == default),
+        id=vid, label=label, gender=rec.get("gender") or None,
+        style=rec.get("style", DEFAULT_STYLE),
+        source=rec.get("source", "custom"),
+        is_default=(vid == default_id),
     )
 
 
 def list_voices() -> VoicesResponse:
-    dv = engine.default_voice()
-    items: List[VoiceInfo] = []
-    for label, vid in engine.list_voices():
-        items.append(_to_info(vid, label, engine.voice_meta(vid), dv))
+    dv = repo.default_voice_id()
+    items: List[VoiceInfo] = [_to_info(r, dv) for r in repo.list_all()]
     return VoicesResponse(count=len(items), default_voice=dv, voices=items)
 
 
 def get_voice(voice_id: str) -> Optional[VoiceInfo]:
-    if not engine.has_voice(voice_id):
+    rec = repo.get(voice_id)
+    if rec is None:
         return None
-    meta = engine.voice_meta(voice_id)
-    label = f"{voice_id} — {meta.get('description')}" if meta.get("description") else voice_id
-    return _to_info(voice_id, label, meta, engine.default_voice())
+    return _to_info(rec, repo.default_voice_id())
 
 
 # ── Write ─────────────────────────────────────────────────────────────────────
 def enroll(name: str, audio_bytes: bytes, filename: str, *, description: str = "",
            gender: str = "", style: str = DEFAULT_STYLE, denoise: bool = True) -> VoiceInfo:
-    """Clone 1 giọng mới từ audio mẫu (3–8s)."""
+    """Clone 1 giọng mới từ audio mẫu (3–8s) → trích đặc trưng → LƯU DB."""
     if not engine.loaded:
         raise VoiceError(503, "Model chưa sẵn sàng.")
-    if engine.has_voice(name):
+    if repo.exists(name):
         raise VoiceError(409, f"Voice '{name}' đã tồn tại.")
 
     ext = ("." + filename.rsplit(".", 1)[-1].lower()) if filename and "." in filename else ".wav"
@@ -72,23 +73,49 @@ def enroll(name: str, audio_bytes: bytes, filename: str, *, description: str = "
     dest = _UPLOAD_DIR / f"{uuid.uuid4()}{ext}"
     dest.write_bytes(audio_bytes)
     try:
-        engine.enroll(name, str(dest), description=description, gender=gender,
-                      style=style, denoise=denoise)
+        emb, codes = engine.extract_reference(str(dest), denoise=denoise)
     except Exception as e:
         raise VoiceError(500, f"Lỗi phân tích giọng: {type(e).__name__}: {e}")
     finally:
         dest.unlink(missing_ok=True)
 
-    logger.info("➕ enrolled voice '%s' (in-process)", name)
+    repo.upsert(name, speaker_emb=emb, codes=codes, name=name, description=description,
+                gender=gender, default_style=style, source="custom")
+    logger.info("➕ enrolled voice '%s' → DB (source=custom)", name)
     return VoiceInfo(id=name, label=name, gender=gender or None, style=style,
                      source="custom", is_default=False)
 
 
 def delete(voice_id: str) -> None:
-    if not engine.has_voice(voice_id):
+    rec = repo.get(voice_id)
+    if rec is None:
         raise VoiceError(404, f"Voice '{voice_id}' không tồn tại.")
-    engine.remove(voice_id)
-    logger.info("🗑️ deleted voice '%s'", voice_id)
+    if rec.get("source") == "preset":
+        raise VoiceError(409, f"Voice '{voice_id}' là preset, không thể xóa.")
+    repo.delete(voice_id)
+    logger.info("🗑️ deleted voice '%s' khỏi DB", voice_id)
 
 
-__all__ = ["list_voices", "get_voice", "enroll", "delete", "ALLOWED_EXT", "VoiceError"]
+def seed_presets() -> int:
+    """Đẩy 10 giọng preset (SDK nạp sẵn trong RAM) vào DB — gọi 1 lần lúc boot.
+
+    Idempotent: giọng preset đã có thì cập nhật lại (giữ nguyên custom của user).
+    Sau bước này DB là nguồn sự thật DUY NHẤT cho mọi giọng. Trả số giọng seed.
+    """
+    seeds = engine.preset_seed_records()
+    n = 0
+    for s in seeds:
+        repo.upsert(
+            s["id"], speaker_emb=s.get("speaker_emb"), codes=s.get("codes"),
+            name=s["id"], description=s.get("description", ""),
+            gender=s.get("gender", ""), default_style=s.get("style", DEFAULT_STYLE),
+            source="preset", is_default=s.get("is_default", False),
+        )
+        n += 1
+    if n:
+        logger.info("🌱 seed %d giọng preset vào DB (tổng %d giọng)", n, repo.count())
+    return n
+
+
+__all__ = ["list_voices", "get_voice", "enroll", "delete", "seed_presets",
+           "ALLOWED_EXT", "VoiceError"]

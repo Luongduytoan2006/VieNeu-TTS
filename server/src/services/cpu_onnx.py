@@ -57,7 +57,7 @@ def run(job: Job) -> None:
             job.touch()
             logger.info("⏹️ job %s cancelled %d/%d", job.id[:8], i, job.total_chunks)
             return
-        wav = engine.synth_chunk(chunk, job.voice, job.style, job.temperature)
+        wav = engine.synth_chunk(chunk, job.voice_record, job.style, job.temperature)
         if wav is not None and len(wav) > 0:
             wavs.append(wav)
         job.done_chunks = i + 1

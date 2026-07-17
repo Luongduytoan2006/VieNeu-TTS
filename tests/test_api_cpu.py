@@ -23,10 +23,13 @@ if str(_SERVER) not in sys.path:
 
 os.environ["MODEL_EAGER_LOAD"] = "0"      # KHÔNG eager-load model ở startup
 os.environ["STORAGE_BACKEND"] = "local"   # không đụng R2
+# DB riêng cho test — không ghi đè server/data/vieneu.db thật.
+os.environ["VIENEU_DB_PATH"] = str(Path(__file__).resolve().parent / "_test_api.db")
 
 import main  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from src.engine import engine  # noqa: E402
+from src.repositories import voices_repo as repo  # noqa: E402
 
 
 def _client() -> TestClient:
@@ -73,18 +76,23 @@ def test_tts_returns_503_when_model_not_loaded():
     assert r.status_code == 503
 
 
-# ── POST /tts: model "load" + text ngắn + gpu → 422 (BE chặn) ───────────────────
+# ── POST /tts: model "load" + text ngắn + gpu → 422 (BE chặn GPU) ───────────────
 def test_tts_short_gpu_blocked_422():
-    # Giả lập model đã load để vượt qua check 503, tới được lớp chặn GPU (422).
-    # (không cần model thật — chỉ cần engine.loaded == True)
+    # Giả lập model đã load để vượt qua check 503. Phải có SẴN 1 giọng trong DB để
+    # qua được bước resolve-voice (cũng trả 422) và thật sự chạm lớp chặn GPU.
+    import numpy as np
     saved = engine._tts
-    engine._tts = object()          # engine.loaded -> True
+    engine._tts = object()                       # engine.loaded -> True
+    repo.upsert("_t", speaker_emb=np.zeros(192), codes=None, is_default=True)
     try:
         with _client() as c:
-            r = c.post("/api/v1/tts", json={"text": "xin chào", "mode": "gpu"})
+            r = c.post("/api/v1/tts",
+                       json={"text": "xin chào", "mode": "gpu", "voice": "_t"})
         assert r.status_code == 422
+        assert "GPU" in r.json()["detail"]       # đúng lỗi gate GPU, không phải voice
     finally:
         engine._tts = saved
+        repo.delete("_t")
 
 
 # ── Runner khi chạy bằng ``python`` thuần (không có pytest) ─────────────────────

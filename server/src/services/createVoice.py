@@ -14,6 +14,7 @@ from typing import Optional
 
 from ..config import settings
 from ..engine import engine
+from ..repositories import voices_repo as repo
 from ..schemas import (
     DEFAULT_STYLE, MODE_AUTO, MODE_CPU, MODE_GPU, MODE_CHOICES, STYLE_CHOICES,
 )
@@ -68,13 +69,17 @@ def resolve_mode(text: str, requested: str) -> str:
 def create(text: str, voice: Optional[str], style: str, temperature: float,
            max_chars: int, mode: str = MODE_AUTO) -> Job:
     """Kiểm tra điều kiện, chốt mode, tạo job. Trả về Job (đã có id + mode)."""
-    # 1. Model phải sẵn sàng (CPU in-process). GPU cũng cần catalog giọng từ đây.
+    # 1. Model phải sẵn sàng (CPU in-process synth cần model nạp sẵn).
     if not engine.loaded:
         raise CreateError(503, "Model chưa sẵn sàng. Xem GET /api/v1/health.")
 
-    # 2. Voice (nếu chỉ định) phải tồn tại.
-    if voice and not engine.has_voice(voice):
-        raise CreateError(422, f"Voice '{voice}' không tồn tại. Xem GET /api/v1/voices.")
+    # 2. Chốt giọng TỪ DB (không tra RAM). Bỏ trống → giọng mặc định.
+    voice_id = voice or repo.default_voice_id()
+    if not voice_id:
+        raise CreateError(422, "Chưa có giọng nào. Nạp giọng qua POST /api/v1/voices.")
+    record = repo.get(voice_id)
+    if record is None:
+        raise CreateError(422, f"Voice '{voice_id}' không tồn tại. Xem GET /api/v1/voices.")
 
     # 3. Style hợp lệ (fallback mặc định nếu sai).
     style = style if style in STYLE_CHOICES else DEFAULT_STYLE
@@ -82,8 +87,11 @@ def create(text: str, voice: Optional[str], style: str, temperature: float,
     # 4. Chốt mode (lớp chặn GPU thứ 2 ở BE).
     resolved = resolve_mode(text, mode)
 
-    # 5. Tạo job async — worker sẽ rẽ xuống cpu_onnx / gpu_vastai theo job.mode.
-    job = manager.create(text, voice, style, temperature, max_chars, mode=resolved)
-    logger.info("🎬 tạo job %s mode=%s (yêu cầu=%s, %d từ) voice=%s",
-                job.id[:8], resolved, mode, count_words(text), voice)
+    # 5. Tạo job async, đính kèm RECORD giọng (dict emb+codes) để worker (cpu/gpu)
+    #    dùng thẳng — không phải tra lại catalog. CPU==GPU cùng 1 record.
+    job = manager.create(text, voice_id, style, temperature, max_chars,
+                         mode=resolved, voice_record=record)
+    logger.info("🎬 tạo job %s mode=%s (yêu cầu=%s, %d từ) voice=%s src=%s",
+                job.id[:8], resolved, mode, count_words(text), voice_id,
+                record.get("source"))
     return job

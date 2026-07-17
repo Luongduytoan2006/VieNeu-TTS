@@ -56,6 +56,11 @@ class Settings:
     MAX_CHARS_PER_CHUNK: int = int(os.getenv("VIENEU_MAX_CHARS", "256"))
     MAX_NEW_FRAMES: int = int(os.getenv("VIENEU_MAX_NEW_FRAMES", "300"))
 
+    # ── Database (SQLite mặc định — nguồn sự thật cho giọng) ─────────────────
+    # File .db nằm trong data/ (giữ trên host qua volume Docker). Đổi path hoặc
+    # trỏ sang DB khác qua VIENEU_DB_PATH.
+    DB_PATH: str = os.getenv("VIENEU_DB_PATH", str(_ROOT / "data" / "vieneu.db"))
+
     # ── Ngưỡng chọn mode ─────────────────────────────────────────────────────
     # GPU chỉ được phép khi context đủ dài (đếm SỐ TỪ, tách theo khoảng trắng).
     # FE đã chặn 1 lớp; BE chặn thêm lớp nữa ở services/createVoice.py.

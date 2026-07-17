@@ -35,6 +35,9 @@ class Job:
     temperature: float
     max_chars: int
     mode: str = MODE_CPU
+    # Record giọng (dict: speaker_emb+codes numpy) đã lấy từ DB lúc tạo job.
+    # Worker cpu/gpu dùng thẳng — không tra lại catalog. Không serialize (numpy).
+    voice_record: Optional[dict] = None
     status: str = QUEUED
     total_chunks: int = 0
     done_chunks: int = 0
@@ -59,10 +62,11 @@ class JobManager:
         self._lock = threading.Lock()
 
     def create(self, text: str, voice: Optional[str], style: str, temperature: float,
-               max_chars: int, mode: str = MODE_CPU) -> Job:
+               max_chars: int, mode: str = MODE_CPU,
+               voice_record: Optional[dict] = None) -> Job:
         job = Job(id=str(uuid.uuid4()), text=text, voice=voice,
                   style=style or DEFAULT_STYLE, temperature=temperature,
-                  max_chars=max_chars, mode=mode)
+                  max_chars=max_chars, mode=mode, voice_record=voice_record)
         with self._lock:
             self._jobs[job.id] = job
         threading.Thread(target=self._run, args=(job,), daemon=True,

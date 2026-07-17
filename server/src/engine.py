@@ -80,79 +80,66 @@ class Engine:
                     "cpu" if self._backend == "onnx" else "unknown")
                 self._tts = tts
                 self._load_error = None
-                logger.info("✅ Model hot: backend=%s device=%s voices=%d",
-                            self._backend, self._device, len(self.list_voices()))
+                n_preset = len(getattr(tts, "_preset_voices", {}) or {})
+                logger.info("✅ Model hot: backend=%s device=%s preset(SDK)=%d",
+                            self._backend, self._device, n_preset)
             except Exception as e:
                 self._load_error = f"{type(e).__name__}: {e}"
                 logger.exception("❌ Nạp model thất bại")
                 raise
 
-    # ── Catalog giọng ────────────────────────────────────────────────────────
-    def list_voices(self) -> List[Tuple[str, str]]:
-        return self._tts.list_preset_voices() if self._tts else []
+    # ── Nguồn seed preset (đọc catalog RAM của SDK 1 lần → đẩy vào DB) ────────
+    def preset_seed_records(self) -> List[dict]:
+        """Giọng preset SDK nạp sẵn trong RAM → list record để seed vào DB.
 
-    def default_voice(self) -> Optional[str]:
-        return getattr(self._tts, "_default_voice", None) if self._tts else None
-
-    def has_voice(self, vid: str) -> bool:
-        return bool(self._tts) and vid in self._tts._preset_voices
-
-    def voice_meta(self, vid: str) -> dict:
-        return (self._tts._preset_voices.get(vid, {}) or {}) if self._tts else {}
-
-    def export_voice(self, vid: str) -> Optional[dict]:
-        """Serialize 1 giọng → dict JSON-safe (speaker_emb + codes dạng list).
-
-        Dùng để 'lôi giọng ra ngoài': gửi sang máy GPU ephemeral (SCP JSON vài KB)
-        hoặc lưu DB. Format y hệt ``save_voices`` cho 1 giọng nên nạp lại bằng
-        ``infer(voice=<dict>)`` chạy ngay, KHÔNG cần audio gốc / enroll lại.
+        Chỉ đọc 1 lần lúc khởi động; sau đó DB là nguồn sự thật. Đánh dấu giọng
+        default của SDK (``_default_voice``) để DB set is_default.
         """
-        v = self._tts._preset_voices.get(vid) if self._tts else None
-        if not isinstance(v, dict):
-            return None
-        emb, codes = v.get("speaker_emb"), v.get("codes")
-        return {
-            "description": v.get("description", ""),
-            "gender": v.get("gender", ""),
-            "style": v.get("style", DEFAULT_STYLE),
-            "speaker_emb": None if emb is None
-            else [round(float(x), 6) for x in np.asarray(emb).reshape(-1)],
-            "codes": None if codes is None else np.asarray(codes, dtype=int).tolist(),
-        }
+        if not self._tts:
+            return []
+        default = getattr(self._tts, "_default_voice", None)
+        out = []
+        for name, v in self._tts._preset_voices.items():
+            if not isinstance(v, dict):
+                continue
+            out.append({
+                "id": name,
+                "description": v.get("description", ""),
+                "gender": v.get("gender", ""),
+                "style": v.get("style", DEFAULT_STYLE),
+                "speaker_emb": v.get("speaker_emb"),
+                "codes": v.get("codes"),
+                "is_default": (name == default),
+            })
+        return out
+
+    # ── Trích đặc trưng giọng từ audio (cho enroll) ──────────────────────────
+    def extract_reference(self, ref_audio_path: str, *, denoise: bool = True):
+        """Audio mẫu → ``(speaker_emb, codes)`` (numpy). KHÔNG lưu RAM — caller
+        (voices service) tự ghi vào DB. Đây là phần 'cần model' của enroll."""
+        with self._infer_lock:
+            return self._tts.encode_reference(ref_audio_path, denoise=denoise)
 
     # ── Chunk + synth từng chunk (để báo % tiến độ) ──────────────────────────
     def split_chunks(self, text: str, max_chars: int):
         from vieneu_utils.phonemize_text import normalize_to_chunks_v3_with_gaps
         return normalize_to_chunks_v3_with_gaps(text, max_chars=max_chars)
 
-    def synth_chunk(self, chunk_text: str, voice, style: str, temperature: float) -> np.ndarray:
+    def synth_chunk(self, chunk_text: str, voice_record: dict, style: str,
+                    temperature: float) -> np.ndarray:
+        """Synth THUẦN: nhận record giọng (dict có speaker_emb + codes) đã lấy từ
+        DB. Engine KHÔNG còn tra catalog theo tên — mọi giọng (preset/custom) đều
+        vào đây dưới cùng 1 dạng record, giống hệt đường GPU. CPU==GPU về input."""
         from vieneu_utils.phonemize_text import phonemize_text_with_emotions
         style = style if style in STYLE_CHOICES else DEFAULT_STYLE
+        spk = voice_record.get("speaker_emb")
+        ref = voice_record.get("codes")
         with self._infer_lock:
-            spk, ref = self._tts._resolve_ref(voice=voice, ref_audio=None,
-                                              denoise=True, use_ref_codes=True)
             ph = phonemize_text_with_emotions(chunk_text)
             return self._tts.engine.infer(
                 phonemes=ph, speaker_emb=spk, ref_codes=ref, style=style,
-                use_ref_codes=True, temperature=temperature,
+                use_ref_codes=ref is not None, temperature=temperature,
                 max_new_frames=settings.MAX_NEW_FRAMES)
-
-    # ── Voice enrollment (clone) ─────────────────────────────────────────────
-    def enroll(self, name: str, ref_audio_path: str, *, denoise: bool = True,
-               description: str = "", gender: str = "", style: str = DEFAULT_STYLE) -> None:
-        with self._infer_lock:
-            self._tts.add_voice(name, ref_audio_path, denoise=denoise,
-                                description=description, gender=gender, style=style, save=False)
-            # Đánh dấu giọng clone (chỉ có trong RAM VPS) để phân biệt với preset
-            # bundle. Dùng ở: voices.py (source=custom) + gpu_vastai (serialize gửi
-            # GPU). Chỉ là cờ RAM — save_voices/export_voice không serialize key này.
-            v = self._tts._preset_voices.get(name)
-            if isinstance(v, dict):
-                v["_custom"] = True
-
-    def remove(self, name: str) -> None:
-        if self._tts:
-            self._tts.remove_voice(name, save=False)
 
 
 engine = Engine()

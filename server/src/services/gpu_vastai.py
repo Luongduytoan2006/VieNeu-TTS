@@ -315,6 +315,24 @@ class VastAIClient:
         return result
 
 
+def _serialize_record(rec: Optional[dict]) -> Optional[dict]:
+    """Record giọng (numpy speaker_emb+codes) → dict JSON-safe để SCP lên GPU.
+
+    Trả None nếu record rỗng/không emb (GPU dùng giọng mặc định của synth_job).
+    """
+    import numpy as np
+    if not rec or rec.get("speaker_emb") is None:
+        return None
+    emb, codes = rec["speaker_emb"], rec.get("codes")
+    return {
+        "description": rec.get("description", ""),
+        "gender": rec.get("gender", ""),
+        "style": rec.get("style", "tu_nhien"),
+        "speaker_emb": [round(float(x), 6) for x in np.asarray(emb).reshape(-1)],
+        "codes": None if codes is None else np.asarray(codes, dtype=int).tolist(),
+    }
+
+
 # ── Hàm ngoài: chạy trọn 1 job GPU ────────────────────────────────────────────
 def run(job) -> None:
     """Chạy 1 job TTS trên GPU Vast.ai ephemeral (blocking, trong thread của job).
@@ -356,14 +374,10 @@ def run(job) -> None:
         job.progress = 30.0
         job.touch()
 
-        # Nếu là giọng clone (custom, chỉ có trong RAM VPS) → serialize gửi lên GPU.
-        # Preset (đóng gói trong JSON bundle của package) thì để synth_job tự có.
-        voice_rec = None
-        if job.voice:
-            from ..engine import engine
-            meta = engine.voice_meta(job.voice)
-            if isinstance(meta, dict) and meta.get("_custom"):
-                voice_rec = engine.export_voice(job.voice)
+        # DB là nguồn sự thật cho MỌI giọng (preset lẫn custom): serialize record
+        # đã đính vào job (numpy → JSON-safe) rồi SCP lên GPU. Đồng nhất, không
+        # phụ thuộc bundle preset của package trên máy GPU.
+        voice_rec = _serialize_record(job.voice_record)
 
         result = client.setup_and_synth(
             job.text, job.voice, job.style, out_wav,

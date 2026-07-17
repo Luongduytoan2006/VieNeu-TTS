@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from ..config import settings
 from ..engine import engine
+from ..repositories import voices_repo as repo
 from ..schemas import (
     DEFAULT_STYLE, STYLE_CHOICES, HealthResponse, ModeInfo, ModesResponse,
     StyleInfo, StylesResponse,
@@ -42,7 +43,7 @@ def health() -> HealthResponse:
         backend=engine.backend, device=engine.device,
         backbone_repo=settings.BACKBONE_REPO,
         sample_rate=engine.sample_rate if loaded else None,
-        num_voices=len(engine.list_voices()),
+        num_voices=repo.count(),
         active_jobs=manager.active_count(),
         gpu_min_words=settings.GPU_MIN_WORDS,
     )
