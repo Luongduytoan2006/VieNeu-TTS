@@ -362,6 +362,7 @@ def run(job) -> None:
         iid = client.create(offer["id"])
         logger.warning("###### VAST INSTANCE_ID=%s (destroy tay: vastai destroy instance %s) ######",
                        iid, iid)
+        job.instance_id = iid                   # persist DB để truy vết tiền
         job.progress = 10.0
         job.touch()
 

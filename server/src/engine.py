@@ -88,30 +88,38 @@ class Engine:
                 logger.exception("❌ Nạp model thất bại")
                 raise
 
-    # ── Nguồn seed preset (đọc catalog RAM của SDK 1 lần → đẩy vào DB) ────────
-    def preset_seed_records(self) -> List[dict]:
-        """Giọng preset SDK nạp sẵn trong RAM → list record để seed vào DB.
+    # ── Preset ở RAM (giọng hệ thống, KHÔNG vào DB) ──────────────────────────
+    # 10 giọng preset do SDK nạp sẵn (bundle của model). Dùng chung cho MỌI user,
+    # bất biến, không lưu DB. DB chỉ chứa giọng custom user clone.
+    def _presets(self) -> dict:
+        """Dict preset của SDK (an toàn khi _tts chưa/không phải Vieneu thật)."""
+        return getattr(self._tts, "_preset_voices", {}) or {}
 
-        Chỉ đọc 1 lần lúc khởi động; sau đó DB là nguồn sự thật. Đánh dấu giọng
-        default của SDK (``_default_voice``) để DB set is_default.
-        """
-        if not self._tts:
-            return []
-        default = getattr(self._tts, "_default_voice", None)
-        out = []
-        for name, v in self._tts._preset_voices.items():
-            if not isinstance(v, dict):
-                continue
-            out.append({
-                "id": name,
-                "description": v.get("description", ""),
-                "gender": v.get("gender", ""),
-                "style": v.get("style", DEFAULT_STYLE),
-                "speaker_emb": v.get("speaker_emb"),
-                "codes": v.get("codes"),
-                "is_default": (name == default),
-            })
-        return out
+    def default_preset_id(self) -> Optional[str]:
+        return getattr(self._tts, "_default_voice", None) if self._tts else None
+
+    def has_preset(self, vid: str) -> bool:
+        return vid in self._presets()
+
+    def _preset_to_record(self, vid: str, v: dict) -> dict:
+        return {
+            "id": vid, "user_ref": None,
+            "description": v.get("description", ""), "gender": v.get("gender", ""),
+            "region": v.get("region", ""), "style": v.get("style", DEFAULT_STYLE),
+            "source": "preset", "is_default": (vid == self.default_preset_id()),
+            "speaker_emb": v.get("speaker_emb"), "codes": v.get("codes"),
+        }
+
+    def get_preset_record(self, vid: str) -> Optional[dict]:
+        """1 giọng preset → record runtime (numpy) như voices_repo.get trả ra.
+        Nhờ đó preset và custom đi CÙNG 1 dạng record xuống synth (CPU/GPU)."""
+        v = self._presets().get(vid)
+        return self._preset_to_record(vid, v) if isinstance(v, dict) else None
+
+    def list_preset_records(self) -> List[dict]:
+        """Mọi giọng preset (record runtime) — để GET /voices ghép với custom."""
+        return [self._preset_to_record(n, v)
+                for n, v in self._presets().items() if isinstance(v, dict)]
 
     # ── Trích đặc trưng giọng từ audio (cho enroll) ──────────────────────────
     def extract_reference(self, ref_audio_path: str, *, denoise: bool = True):

@@ -58,15 +58,17 @@ class _ForceHttpsProto:
 async def lifespan(app: FastAPI):
     logger.info("🔧 CPU mode in-process; GPU mode qua Vast.ai on-demand (ngưỡng %d từ).",
                 settings.GPU_MIN_WORDS)
-    # DB (SQLite) — nguồn sự thật cho giọng. Tạo bảng trước.
+    # DB (PostgreSQL) — lưu giọng custom + jobs của user. Tạo bảng trước.
     from src.db import init_db
+    from src.repositories import jobs_repo
     init_db()
+    # Job còn queued/running từ lần chạy trước = mồ côi (RAM đã mất) → đánh dấu error.
+    n = jobs_repo.mark_interrupted()
+    if n:
+        logger.warning("⚠️ %d job mồ côi từ lần chạy trước → đánh dấu error.", n)
     if settings.MODEL_EAGER_LOAD:
         try:
-            engine.load()
-            # Seed 10 preset (SDK RAM → DB) để DB thành nguồn sự thật duy nhất.
-            from src.services.voices import seed_presets
-            seed_presets()
+            engine.load()   # preset nạp vào RAM (dùng chung, KHÔNG vào DB)
         except Exception:
             logger.error("Nạp model ở startup thất bại; /api/v1/health sẽ báo lỗi.")
     yield

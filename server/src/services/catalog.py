@@ -43,7 +43,8 @@ def health() -> HealthResponse:
         backend=engine.backend, device=engine.device,
         backbone_repo=settings.BACKBONE_REPO,
         sample_rate=engine.sample_rate if loaded else None,
-        num_voices=repo.count(),
+        # preset (RAM, chung) + tổng custom (DB, mọi user).
+        num_voices=len(engine.list_preset_records()) + repo.count(),
         active_jobs=manager.active_count(),
         gpu_min_words=settings.GPU_MIN_WORDS,
     )

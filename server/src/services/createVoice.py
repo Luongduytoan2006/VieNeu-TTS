@@ -66,20 +66,34 @@ def resolve_mode(text: str, requested: str) -> str:
     return MODE_CPU
 
 
+def resolve_voice(user_ref: str, voice: Optional[str]) -> dict:
+    """Chốt record giọng: PRESET (RAM, dùng chung) TRƯỚC, else CUSTOM của user (DB).
+
+    Bỏ trống voice → giọng preset mặc định. Ném CreateError(422) nếu không thấy.
+    """
+    voice_id = voice or engine.default_preset_id()
+    if not voice_id:
+        raise CreateError(422, "Chưa có giọng nào khả dụng.")
+    # 1) preset (RAM) — dùng chung mọi user
+    record = engine.get_preset_record(voice_id)
+    # 2) custom của chính user (DB)
+    if record is None:
+        record = repo.get(user_ref, voice_id)
+    if record is None:
+        raise CreateError(422, f"Voice '{voice_id}' không tồn tại. Xem GET /api/v1/voices.")
+    return record
+
+
 def create(text: str, voice: Optional[str], style: str, temperature: float,
-           max_chars: int, mode: str = MODE_AUTO) -> Job:
+           max_chars: int, mode: str = MODE_AUTO, user_ref: str = "default") -> Job:
     """Kiểm tra điều kiện, chốt mode, tạo job. Trả về Job (đã có id + mode)."""
     # 1. Model phải sẵn sàng (CPU in-process synth cần model nạp sẵn).
     if not engine.loaded:
         raise CreateError(503, "Model chưa sẵn sàng. Xem GET /api/v1/health.")
 
-    # 2. Chốt giọng TỪ DB (không tra RAM). Bỏ trống → giọng mặc định.
-    voice_id = voice or repo.default_voice_id()
-    if not voice_id:
-        raise CreateError(422, "Chưa có giọng nào. Nạp giọng qua POST /api/v1/voices.")
-    record = repo.get(voice_id)
-    if record is None:
-        raise CreateError(422, f"Voice '{voice_id}' không tồn tại. Xem GET /api/v1/voices.")
+    # 2. Chốt giọng: preset (RAM) hoặc custom của user (DB).
+    record = resolve_voice(user_ref, voice)
+    voice_id = record["id"]
 
     # 3. Style hợp lệ (fallback mặc định nếu sai).
     style = style if style in STYLE_CHOICES else DEFAULT_STYLE
@@ -90,8 +104,8 @@ def create(text: str, voice: Optional[str], style: str, temperature: float,
     # 5. Tạo job async, đính kèm RECORD giọng (dict emb+codes) để worker (cpu/gpu)
     #    dùng thẳng — không phải tra lại catalog. CPU==GPU cùng 1 record.
     job = manager.create(text, voice_id, style, temperature, max_chars,
-                         mode=resolved, voice_record=record)
-    logger.info("🎬 tạo job %s mode=%s (yêu cầu=%s, %d từ) voice=%s src=%s",
-                job.id[:8], resolved, mode, count_words(text), voice_id,
+                         mode=resolved, voice_record=record, user_ref=user_ref)
+    logger.info("🎬 tạo job %s user=%s mode=%s (yêu cầu=%s, %d từ) voice=%s src=%s",
+                job.id[:8], user_ref, resolved, mode, count_words(text), voice_id,
                 record.get("source"))
     return job
