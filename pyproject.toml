@@ -77,11 +77,11 @@ dependencies = [
     "PyYAML",               # gradio config.yaml
     "gradio>=5.49.1",       # web UI (vieneu-web)
     "perth>=0.2.0",         # optional audio watermark (skipped gracefully if absent)
-    "fastapi>=0.115.0",     # REST API (vieneu-api) — explicit, not via gradio transitively
+    "fastapi>=0.115.0",     # REST API (server/main.py) — explicit, not via gradio transitively
     "uvicorn>=0.30.0",      # ASGI server for the REST API
     "python-multipart>=0.0.9",  # multipart/form-data for voice audio upload
-    "sqlalchemy>=2.0",      # ORM for job/voice metadata (Postgres)
-    "psycopg[binary]>=3.1", # Postgres driver (sync)
+    "boto3>=1.34",          # Cloudflare R2 (S3-compatible) storage — server/src/storage.py
+    "requests>=2.31",       # HTTP client cho Vast.ai — server/src/services/vastai.py
 ]
 
 [project.urls]
@@ -144,18 +144,15 @@ gpu = [
 pythonpath = ["src"]
 
 [project.scripts]
-# BE (CPU): logic only — REST API, jobs, DB. In remote mode it calls the GPU
-# model-server; in local mode it also loads the model in-process.
-vieneu-api = "vieneu_api.app:main"
-# Model-server (GPU): owns the model, synthesizes, stores audio, returns a URL.
-vieneu-model-server = "vieneu_model_server.app:main"
+# App chính sống ở server/ (chạy: `uv run python server/main.py`). Không khai báo
+# entry-point ở đây vì server/ không phải package cài đặt — chạy trực tiếp qua main.py.
 
 [tool.setuptools]
-package-dir = {"" = "src", "apps" = "apps", "examples" = "examples"}
+package-dir = {"" = "src", "examples" = "examples"}
 
 [tool.setuptools.packages.find]
 where = ["src", "."]
-include = ["vieneu*", "vieneu_utils*", "apps*", "examples*"]
+include = ["vieneu*", "vieneu_utils*", "examples*"]
 
 [tool.setuptools.package-data]
 vieneu = ["assets/*.json", "assets/samples/*"]

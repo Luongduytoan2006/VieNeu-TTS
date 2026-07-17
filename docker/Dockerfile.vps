@@ -1,0 +1,59 @@
+# syntax=docker/dockerfile:1
+
+# ── VieNeu-TTS · VPS backend (CPU-only, torch-free) ──────────────────────────
+# Chạy TOÀN BỘ app trên 1 server: API (FastAPI :7862 → /api/v1 + /docs) và giao
+# diện demo (:7870 → phục vụ demo/index.html). Đường suy luận là CPU/ONNX
+# in-process — KHÔNG torch, KHÔNG group `gpu`.
+#
+#   Build/run qua docker-compose.yaml ở repo root:   docker compose up -d
+#
+# ⚠️  CHỈ dùng cho VPS CPU. Server GPU KHÔNG dùng Docker: Vast.ai on-demand kéo
+#     code thẳng từ GitHub rồi tự chạy (xem server/src/services/gpu_vastai.py).
+# -----------------------------------------------------------------------------
+FROM python:3.12-slim
+
+# uv — trình quản lý gói/venv của dự án (pyproject.toml + uv.lock ở repo root).
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    # HF cache → mount named volume vào đây để KHỎI tải lại ~1.5GB model.
+    HF_HOME=/root/.cache/huggingface \
+    # venv cố định; đưa lên PATH để `python` chính là python của venv.
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_LINK_MODE=copy \
+    # Dùng python 3.12 của base image, không để uv tải bản python riêng.
+    UV_PYTHON_DOWNLOADS=0 \
+    PATH="/opt/venv/bin:$PATH"
+
+# libgomp1: onnxruntime cần OpenMP runtime. (soundfile/soxr đã bundle native lib
+# trong wheel manylinux nên không cần libsndfile/soxr từ apt.)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 1) Layer deps (cache lâu): chỉ cần manifest + lock. --no-install-project để
+#    KHÔNG build package `vieneu` (code app chạy từ server/ qua sys.path
+#    bootstrap trong main.py, không cần cài như package). --no-dev + default
+#    groups rỗng ⇒ CHỈ core torch-free (KHÔNG group `gpu`).
+#    Cố ý KHÔNG dùng --frozen: uv.lock trong repo có thể lệch nhẹ với
+#    pyproject.toml (giống hệt lệnh chạy tay `uv run python server/main.py` —
+#    uv tự resolve lại khi cần), nên build vẫn thành công thay vì vỡ vì lock cũ.
+COPY pyproject.toml uv.lock ./
+RUN uv sync --no-install-project --no-dev
+
+# 2) Copy code app: entrypoint + backend (server/) và giao diện (demo/).
+#    config.py: DEMO_DIR = repo_root/demo → /app/demo ; STORAGE_LOCAL_DIR =
+#    server/data → /app/server/data.
+COPY server/ ./server/
+COPY demo/ ./demo/
+
+# API (7862) + demo UI (7870).
+EXPOSE 7862 7870
+
+# Nạp model ngay lúc khởi động (tải HF lần đầu vào HF_HOME). venv đã dựng ở trên
+# và nằm trên PATH → gọi python trực tiếp, không sync lại lúc chạy.
+ENV MODEL_EAGER_LOAD=1
+CMD ["python", "server/main.py"]

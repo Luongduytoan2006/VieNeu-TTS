@@ -1,62 +1,70 @@
-# Python cache
+# Build context = repo root. Chỉ cần: pyproject.toml, uv.lock, server/, demo/.
+# Loại mọi thứ nặng/không liên quan để build nhanh và image gọn.
+
+# Python cache / bytecode
 __pycache__/
-*.pyc
-*.pyo
 **/__pycache__/
 *.py[cod]
 *$py.class
 
-# Git
-.git/
-.github/
-.gitignore
-
-# Virtual environments
+# Virtual environments (image tự dựng venv qua uv — KHÔNG copy .venv của host)
 .venv/
 venv/
 env/
 ENV/
+/opt/venv/
 
+# Git & CI
+.git/
+.gitignore
+.gitattributes
+.github/
 
-# Output files
+# Docker (không cần trong context)
+docker/
+docker-compose*.yaml
+docker-compose*.yml
+.dockerignore
+
+# Môi trường & secrets (compose nạp .env qua env_file, không cần trong image)
+.env
+.env.local
+.env.*
+
+# Tests / notebooks / finetune (không cần để chạy server)
+tests/
+finetune/
+examples/
+docs/
+client/
+
+# Trợ lý / ghi chú nội bộ
+.ask/
+.claude/
+
+# Audio & dữ liệu sinh ra (mount volume lúc chạy, đừng nhét vào image)
+*.wav
+data/
+server/data/
 output_audio/
+outputs/
 
-# Web UI (React)
+# Web UI (React) — không dùng ở path này
 web_ui/node_modules/
 web_ui/dist/
 web_ui/.vite/
 node_modules/
 
-# Logs
+# Logs / tạm / OS / IDE
 *.log
 logs/
-
-# OS files
+*.tmp
+.cache/
 .DS_Store
 Thumbs.db
 *.swp
 *.swo
 *~
-
-# Environment
-.env
-.env.local
-
-# IDE
 .vscode/
 .idea/
 *.sublime-*
-
-# Audio files (except samples)
-*.wav
-!sample/*.wav
-outputs/
-
-# Temporary files
-*.tmp
-.cache/
-
-
-
-
-
