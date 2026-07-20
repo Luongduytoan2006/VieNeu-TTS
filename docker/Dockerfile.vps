@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 
 # ── VieNeu-TTS · VPS backend (CPU-only, torch-free) ──────────────────────────
-# Chạy TOÀN BỘ app trên 1 server: API (FastAPI :7862 → /api/v1 + /docs) và giao
-# diện demo (:7870 → phục vụ demo/index.html). Đường suy luận là CPU/ONNX
+# Chạy TOÀN BỘ app trên 1 server, 1 cổng: giao diện UI tại "/" và API tại
+# /api/v1 (+ /docs) — đều trên :7862 (ui/index.html). Đường suy luận là CPU/ONNX
 # in-process — KHÔNG torch, KHÔNG group `gpu`.
 #
 #   Build/run qua docker-compose.yaml ở repo root:   docker compose up -d
@@ -44,14 +44,14 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --no-install-project --no-dev
 
-# 2) Copy code app: entrypoint + backend (server/) và giao diện (demo/).
-#    config.py: DEMO_DIR = repo_root/demo → /app/demo ; STORAGE_LOCAL_DIR =
+# 2) Copy code app: entrypoint + backend (server/) và giao diện (ui/).
+#    config.py: UI_DIR = repo_root/ui → /app/ui ; STORAGE_LOCAL_DIR =
 #    server/data → /app/server/data.
 COPY server/ ./server/
-COPY demo/ ./demo/
+COPY ui/ ./ui/
 
-# API (7862) + demo UI (7870).
-EXPOSE 7862 7870
+# UI (/) + API (/api/v1 + /docs) — cùng cổng.
+EXPOSE 7862
 
 # Nạp model ngay lúc khởi động (tải HF lần đầu vào HF_HOME). venv đã dựng ở trên
 # và nằm trên PATH → gọi python trực tiếp, không sync lại lúc chạy.

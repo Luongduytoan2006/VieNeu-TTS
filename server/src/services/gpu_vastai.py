@@ -225,6 +225,40 @@ class VastAIClient:
                               text=True, encoding="utf-8", errors="replace",
                               timeout=timeout)
 
+    def ssh_stream(self, cmd: str, timeout: int, on_line=None) -> "tuple[int, list]":
+        """Chạy lệnh SSH, ĐỌC stdout THEO DÒNG real-time (không đợi xong).
+
+        Mỗi dòng stdout → gọi ``on_line(line)`` ngay (để cập nhật tiến độ). Trả
+        ``(returncode, all_lines)``. Dùng cho synth_job (in PROGRESS/RESULT_JSON
+        dần dần) — subprocess.run gom hết tới lúc xong nên không stream được.
+        """
+        import threading
+        proc = subprocess.Popen(
+            self._ssh_base() + [cmd], stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+            errors="replace", bufsize=1)
+        lines: list = []
+
+        def _reader():
+            for line in proc.stdout:          # blocking theo dòng, flush ngay
+                line = line.rstrip("\n")
+                lines.append(line)
+                if on_line is not None:
+                    try:
+                        on_line(line)
+                    except Exception:
+                        pass
+
+        t = threading.Thread(target=_reader, daemon=True)
+        t.start()
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            raise
+        t.join(timeout=10)
+        return proc.returncode, lines
+
     def wait_ssh(self) -> None:
         """Chờ sshd nhận kết nối (ngay sau running vẫn cần vài giây)."""
         for _ in range(30):
@@ -250,13 +284,17 @@ class VastAIClient:
     # ── Bước cao cấp: đưa code lên + chạy synth + tải WAV về ───────────────────
     def setup_and_synth(self, text: str, voice: Optional[str], style: str,
                         out_wav: Path, *, temperature: float = 0.8,
-                        max_chars: int = 256, voice_rec: Optional[dict] = None) -> dict:
+                        max_chars: int = 256, voice_rec: Optional[dict] = None,
+                        on_progress=None) -> dict:
         """SCP code+script → pip deps → chạy synth_job → tải WAV về ``out_wav``.
 
         Trả RESULT_JSON (timing + audio_sec + sample_rate). Truyền text qua file để
         tránh giới hạn/escape khi nhét vào lệnh SSH. ``voice_rec`` = dict giọng đã
         serialize (speaker_emb + codes) — máy GPU nạp TỪ DICT nên giọng clone (chỉ
         có trong RAM VPS) vẫn dùng được, KHÔNG cần audio gốc.
+
+        ``on_progress(pct)`` (tùy chọn): gọi mỗi khi synth_job in PROGRESS — map
+        nạp model + từng chunk thành % để job.progress bò dần real-time (như CPU).
         """
         import json
 
@@ -298,17 +336,42 @@ class VastAIClient:
         else:
             voice_arg = ""
         cmd = (f"cd /workspace && PYTHONPATH=/workspace HF_HUB_ENABLE_HF_TRANSFER=0 "
-               f'python synth_job.py --out /workspace/out.wav --style {style} '
-               f'--temperature {temperature} --max-chars {max_chars} '
+               f'PYTHONUNBUFFERED=1 python synth_job.py --out /workspace/out.wav '
+               f'--style {style} --temperature {temperature} --max-chars {max_chars} '
                f'--text-file /workspace/{text_local.name} {voice_arg}')
-        run = self.ssh(cmd, timeout=settings.VAST_JOB_TIMEOUT)
+
+        # Đọc stdout synth_job REAL-TIME → map PROGRESS thành % (bò dần như CPU):
+        #   phase=load_model  → 35% (bắt đầu nạp model, sau ssh 30%)
+        #   phase=synth       → 50% (model xong, bắt đầu synth)
+        #   chunk=i total=N   → 50→95% tuyến tính theo i/N (70% quãng là synth)
+        def _on_line(line: str):
+            if not line.startswith("PROGRESS:") or on_progress is None:
+                return
+            body = line[len("PROGRESS:"):]
+            if "phase=load_model" in body:
+                on_progress(35.0, 0, 0)
+            elif "phase=synth" in body:
+                try:
+                    n = int(dict(p.split("=") for p in body.split() if "=" in p)["total"])
+                except Exception:
+                    n = 0
+                on_progress(50.0, 0, n)
+            elif body.startswith("chunk="):
+                try:
+                    parts = dict(p.split("=") for p in body.split())
+                    i, n = int(parts["chunk"]), max(int(parts["total"]), 1)
+                    on_progress(round(50.0 + (i / n) * 45.0, 1), i, n)
+                except Exception:
+                    pass
+
+        rc, lines = self.ssh_stream(cmd, timeout=settings.VAST_JOB_TIMEOUT, on_line=_on_line)
         result = None
-        for line in run.stdout.splitlines():
+        for line in lines:
             if line.startswith("RESULT_JSON:"):
                 result = json.loads(line[len("RESULT_JSON:"):])
         if not result or not result.get("ok"):
-            tail = "\n".join(run.stdout.strip().splitlines()[-8:])
-            raise VastAIError(f"synth_job lỗi (rc={run.returncode}): {tail}")
+            tail = "\n".join([l for l in lines if l][-8:])
+            raise VastAIError(f"synth_job lỗi (rc={rc}): {tail}")
 
         # 4. Tải WAV về VPS.
         self.scp_down("/workspace/out.wav", out_wav)
@@ -380,14 +443,26 @@ def run(job) -> None:
         # phụ thuộc bundle preset của package trên máy GPU.
         voice_rec = _serialize_record(job.voice_record)
 
+        # Cập nhật % real-time từ PROGRESS của synth_job (nạp model + từng chunk).
+        # Chỉ tăng (không lùi) để UI không giật. done/total_chunks để UI hiện (i/N).
+        def _prog(pct: float, done: int, total: int):
+            if total:
+                job.total_chunks = total
+            if done:
+                job.done_chunks = done
+            if pct > (job.progress or 0):
+                job.progress = pct
+            job.touch()
+
         result = client.setup_and_synth(
             job.text, job.voice, job.style, out_wav,
-            temperature=job.temperature, max_chars=job.max_chars, voice_rec=voice_rec)
+            temperature=job.temperature, max_chars=job.max_chars, voice_rec=voice_rec,
+            on_progress=_prog)
         if job.cancel.is_set():
             job.status = CANCELLED
             job.touch()
             return
-        job.progress = 85.0
+        job.progress = 96.0            # synth xong (callback đã bò tới ~95%), sắp upload
         job.touch()
 
         # Đẩy WAV lên R2 (VPS đẩy — GPU không giữ R2 secret).
@@ -402,7 +477,23 @@ def run(job) -> None:
         job.progress = 100.0
         job.status = DONE
         job.touch()
-        logger.info("✅ GPU job %s xong: %ss audio → %s", job.id[:8], job.duration_sec, url)
+        # Log ĐẦY ĐỦ timing để grid search tách boot vs synth thuần (đo "cả 2 cột"):
+        #   t_infer_s = synth THUẦN (giả sử máy warm); t_load_model_s = nạp model;
+        #   boot ≈ elapsed_total − (import + load_model + infer + save + upload).
+        t_infer = result.get("t_infer_s")
+        t_load = result.get("t_load_model_s")
+        t_import = result.get("t_import_torch_s")
+        logger.info("✅ GPU job %s xong: %ss audio · TIMING t_infer=%ss t_load_model=%ss "
+                    "t_import=%ss total=%ss inst=%s → %s",
+                    job.id[:8], job.duration_sec, t_infer, t_load, t_import,
+                    job.elapsed_sec, job.instance_id, url)
+        logger.info("GPU_TIMING_JSON:%s", __import__("json").dumps({
+            "job_id": job.id, "n_words": len(job.text.split()),
+            "total_s": job.elapsed_sec, "t_infer_s": t_infer,
+            "t_load_model_s": t_load, "t_import_torch_s": t_import,
+            "audio_s": job.duration_sec, "n_chunks": result.get("n_chunks"),
+            "sample_rate": job.sample_rate, "instance_id": job.instance_id,
+        }, ensure_ascii=False))
 
     except Exception as e:
         logger.exception("GPU job %s thất bại", job.id[:8])

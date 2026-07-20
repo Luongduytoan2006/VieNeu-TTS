@@ -57,8 +57,9 @@ class Settings:
     MAX_NEW_FRAMES: int = int(os.getenv("VIENEU_MAX_NEW_FRAMES", "300"))
 
     # ── Database (PostgreSQL — nguồn sự thật cho giọng custom + jobs) ─────────
-    # Deploy chỉ cần đổi DATABASE_URL. Mặc định trỏ Postgres dev cổng 7432
-    # (docker-compose.dev.yaml). Dạng: postgresql://user:pass@host:port/dbname
+    # Cấu hình qua DATABASE_URL trong .env. Trong Docker host là 'db' (@db:5432);
+    # chạy tay ngoài Docker dùng localhost:7432. Default dưới đây cho chạy tay.
+    # Dạng: postgresql://user:pass@host:port/dbname
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL", "postgresql://vieneu:vieneu@localhost:7432/vieneu")
 
@@ -98,14 +99,14 @@ class Settings:
     VAST_JOB_TIMEOUT: int = int(os.getenv("VAST_JOB_TIMEOUT", "1200"))    # chờ synth (s)
     VAST_POLL_SEC: int = int(os.getenv("VAST_POLL_SEC", "30"))            # nhịp poll (tiền thật!)
 
-    # ── Giao diện demo (tách ngoài server/, chạy CỔNG RIÊNG) ─────────────────
-    # main.py phục vụ demo/index.html ở cổng này (khác cổng API). Tắt: =0.
-    SERVE_DEMO: bool = _as_bool(os.getenv("VIENEU_SERVE_DEMO", "1"))
-    DEMO_PORT: int = int(os.getenv("VIENEU_DEMO_PORT", "7870"))
-    # Thư mục chứa giao diện — mặc định repo-root/demo (ngoài server/).
-    DEMO_DIR: str = os.getenv("VIENEU_DEMO_DIR", str(_REPO_ROOT / "demo"))
-    # URL API mà giao diện gọi tới (client-side). Mặc định localhost:PORT.
-    API_BASE_URL: str = os.getenv("VIENEU_API_BASE", f"http://localhost:{PORT}")
+    # ── Giao diện UI (phục vụ tại "/" NGAY TRÊN app API, cùng cổng PORT) ──────
+    # main.py phục vụ ui/index.html tại "/". Tắt: =0.
+    SERVE_UI: bool = _as_bool(os.getenv("VIENEU_SERVE_UI", "1"))
+    # Thư mục chứa giao diện — mặc định repo-root/ui (ngoài server/).
+    UI_DIR: str = os.getenv("VIENEU_UI_DIR", str(_REPO_ROOT / "ui"))
+    # URL API mà giao diện gọi tới (client-side). MẶC ĐỊNH RỖNG = đường dẫn tương
+    # đối, cùng origin (chạy sau mọi proxy/domain). Chỉ đặt khi API ở host khác.
+    API_BASE_URL: str = os.getenv("VIENEU_API_BASE", "")
 
 
 settings = Settings()

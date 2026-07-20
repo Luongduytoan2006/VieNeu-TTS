@@ -1,52 +1,61 @@
-# ── VieNeu-TTS · PROD / server (CPU-only, app) ───────────────────────────────
-# Deploy trên server: CHỈ chạy app. DB dùng PostgreSQL RIÊNG của bạn (managed/
-# container khác) — trỏ qua DATABASE_URL trong .env. Chạy 1 lệnh:
+# ── VieNeu-TTS · app (CPU) + PostgreSQL ──────────────────────────────────────
+# MỘT môi trường duy nhất (dev = deploy). Chạy 1 lệnh:
 #
 #     docker compose up -d
 #
-# Sau đó:
+#   • UI    → http://localhost:7862/       (giao diện, cùng cổng API)
 #   • API   → http://localhost:7862/docs   (prefix /api/v1)
-#   • Demo  → http://localhost:7870        (giao diện gọi ngược lại API :7862)
+#   • DB    → localhost:7432               (Postgres, cũng nối được từ app chạy tay)
 #
-# Model tự tải từ Hugging Face lần đầu (~1.5GB) vào named volume `hf-cache`.
-# Audio (khi STORAGE_BACKEND=local) ghi ra ./server/data trên host.
+# TOÀN BỘ cấu hình app đọc từ .env ở repo root — KHÔNG hardcode biến app ở đây,
+# nên sửa .env rồi `docker compose up -d` là đổi. Muốn đổi biến gì → sửa .env.
 #
-# ⚠️  Muốn chạy DEV có sẵn cả DB (không cài Postgres tay) → dùng
-#     docker-compose.dev.yaml (app + Postgres kèm theo).
+# ⚠️  DATABASE_URL trong .env phải trỏ host 'db' (@db:5432) khi chạy bằng Docker
+#     (mạng nội bộ compose). Chạy TAY ngoài Docker thì đổi 'db'→'localhost:7432'.
+# ⚠️  Model tự tải từ Hugging Face lần đầu (~1.5GB) vào named volume 'hf-cache'.
 # ⚠️  Server GPU KHÔNG dùng Docker — Vast.ai on-demand kéo code từ GitHub rồi tự
 #     chạy (server/src/services/gpu_vastai.py). VAST_* / R2_* trong .env cho luồng đó.
 # -----------------------------------------------------------------------------
 services:
-  vieneu-vps:
+  app:
     build:
-      # Context = repo root để COPY được pyproject.toml, uv.lock, server/, demo/.
+      # Context = repo root để COPY được pyproject.toml, uv.lock, server/, ui/.
       context: .
       dockerfile: docker/Dockerfile.vps
     image: vieneu-vps:cpu
-    container_name: vieneu-vps
-    # .env ở repo root: DATABASE_URL (Postgres của bạn) + R2_* + VAST_*.
+    container_name: vieneu-app
+    # .env ở repo root là NGUỒN CẤU HÌNH DUY NHẤT (server + model + DB + R2 + Vast).
     env_file:
       - .env
-    environment:
-      # config.py mặc định đã đúng, khai báo tường minh cho chắc chắn:
-      - HOST=0.0.0.0
-      - PORT=7862
-      - VIENEU_DEMO_PORT=7870
-      # Nạp model ngay lúc khởi động (tránh trễ ở request đầu).
-      - MODEL_EAGER_LOAD=1
-      # VPS chỉ-CPU: lưu + phục vụ audio ngay tại chỗ qua /files/{key}. Muốn dùng
-      # Cloudflare R2 thì bỏ dòng này và đặt STORAGE_BACKEND=r2 trong .env.
-      - STORAGE_BACKEND=local
-      # DATABASE_URL: KHÔNG hardcode ở đây — lấy từ .env (Postgres riêng của server).
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
-      - "7862:7862"   # API (FastAPI /api/v1 + /docs)
-      - "7870:7870"   # Giao diện demo
+      - "7862:7862"   # UI (/) + API (/api/v1 + /docs) — cùng cổng
     volumes:
       # Cache Hugging Face → không tải lại model mỗi lần dựng container.
       - hf-cache:/root/.cache/huggingface
-      # Audio local (STORAGE_LOCAL_DIR = server/data) — giữ trên host để xem.
+      # Audio local (khi STORAGE_BACKEND=local) — giữ trên host để xem.
       - ./server/data:/app/server/data
+    restart: unless-stopped
+
+  # PostgreSQL — giọng custom của user + jobs. Credential lấy từ .env (POSTGRES_*).
+  db:
+    image: postgres:16-alpine
+    container_name: vieneu-db
+    env_file:
+      - .env
+    ports:
+      - "7432:5432"   # expose để app chạy tay ngoài Docker cũng nối được
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
 volumes:
   hf-cache:
+  pgdata:

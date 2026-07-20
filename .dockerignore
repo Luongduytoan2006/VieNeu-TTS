@@ -1,4 +1,4 @@
-# Build context = repo root. Chỉ cần: pyproject.toml, uv.lock, server/, demo/.
+# Build context = repo root. Chỉ cần: pyproject.toml, uv.lock, server/, ui/.
 # Loại mọi thứ nặng/không liên quan để build nhanh và image gọn.
 
 # Python cache / bytecode
@@ -36,7 +36,6 @@ tests/
 finetune/
 examples/
 docs/
-client/
 
 # Trợ lý / ghi chú nội bộ
 .ask/

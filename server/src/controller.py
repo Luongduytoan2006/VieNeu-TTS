@@ -44,11 +44,22 @@ def _download_url(job_id: str) -> str:
 
 
 def _to_status(job: Job) -> JobStatus:
+    # if/else theo mode: GPU thì lấy thêm instance_id + tiền ước tính (truy vết máy
+    # Vast.ai đang thuê); CPU không có mấy field này. get_status đọc từ client gắn
+    # trên job (_vast) — chỉ có khi job GPU còn đang sống trong RAM.
+    inst_id = dph = est_cost = None
+    if job.mode == "gpu":
+        from .services import gpu_vastai
+        gs = gpu_vastai.get_status(job)
+        inst_id = gs.get("instance_id") or getattr(job, "instance_id", None)
+        dph = gs.get("dph") or None
+        est_cost = gs.get("est_cost") or None
     return JobStatus(
         id=job.id, status=job.status, mode=job.mode, progress=job.progress,
         done_chunks=job.done_chunks, total_chunks=job.total_chunks,
         voice=job.voice, style=job.style, duration_sec=job.duration_sec,
         elapsed_sec=job.elapsed_sec, sample_rate=job.sample_rate, error=job.error,
+        instance_id=inst_id, dph=dph, est_cost=est_cost,
         download_url=_download_url(job.id) if job.status == DONE else None,
         created_at=job.created_at, updated_at=job.updated_at,
     )

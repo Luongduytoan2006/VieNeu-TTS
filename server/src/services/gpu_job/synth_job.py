@@ -1,13 +1,19 @@
-"""synth_job.py — chạy TRÊN máy GPU Vast.ai (POC).
+"""synth_job.py — chạy TRÊN máy GPU Vast.ai.
 
-Nhận 1 đoạn text (mặc định ~360 từ), nạp engine VieNeu v3 Turbo (PyTorch/CUDA),
-sinh audio, lưu WAV, và in TIMING từng bước ra stdout dạng JSON dòng cuối
-(prefix "RESULT_JSON:") để orchestrator ở máy local đọc lại.
+Nhận 1 đoạn text, nạp engine VieNeu v3 Turbo (PyTorch/CUDA), sinh audio THEO TỪNG
+CHUNK (giống đường CPU in-process) để BÁO TIẾN ĐỘ real-time, lưu WAV, và in TIMING
+từng bước ra stdout dạng JSON dòng cuối (prefix ``RESULT_JSON:``).
+
+Tiến độ real-time (orchestrator ở VPS đọc stdout live để cập nhật job.progress):
+* ``PROGRESS:phase=load_model``            — bắt đầu nạp model (tải HF lần đầu).
+* ``PROGRESS:phase=synth total=N``         — model xong, bắt đầu synth N chunk.
+* ``PROGRESS:chunk=i total=N``             — vừa synth xong chunk thứ i.
+Mỗi dòng PROGRESS được flush ngay để VPS nhận tức thì (không đợi buffer).
 
 Chạy:  python synth_job.py --out /workspace/out.wav [--text-file f.txt] [--voice "Ngọc Lan"]
 
-Chỉ phụ thuộc engine của tác giả (package `vieneu` + `vieneu_utils`) — KHÔNG import
-backend `src` đang refactor. Watermark tắt mặc định (khỏi cài `perth`).
+Chỉ phụ thuộc engine tác giả (``vieneu`` + ``vieneu_utils``) — KHÔNG import backend
+``src`` đang refactor. Watermark tắt mặc định (khỏi cài ``perth``).
 """
 import argparse
 import json
@@ -38,6 +44,11 @@ DEFAULT_TEXT = (
 )
 
 
+def _emit(msg: str) -> None:
+    """In 1 dòng PROGRESS + flush ngay (để VPS đọc stdout live nhận tức thì)."""
+    print(msg, flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="/workspace/out.wav")
@@ -48,6 +59,7 @@ def main():
     ap.add_argument("--style", default="tu_nhien")
     ap.add_argument("--temperature", type=float, default=0.8)
     ap.add_argument("--max-chars", type=int, default=256)
+    ap.add_argument("--max-new-frames", type=int, default=300)
     args = ap.parse_args()
 
     text = DEFAULT_TEXT
@@ -60,6 +72,7 @@ def main():
 
     # --- device / torch ---
     t0 = time.time()
+    import numpy as np
     import torch
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     result["device"] = dev
@@ -67,44 +80,74 @@ def main():
     result["t_import_torch_s"] = round(time.time() - t0, 2)
 
     # --- load engine (tai model tu HuggingFace lan dau) ---
+    _emit("PROGRESS:phase=load_model")
     t1 = time.time()
     from vieneu import Vieneu
+    from vieneu_utils.phonemize_text import (
+        normalize_to_chunks_v3_with_gaps, phonemize_text_with_emotions,
+    )
+    from vieneu_utils.core_utils import gaps_to_silence, join_audio_chunks
     tts = Vieneu(mode="v3turbo", device=dev)
     result["t_load_model_s"] = round(time.time() - t1, 2)
     result["backend"] = getattr(tts, "backend", "?")
-    result["sample_rate"] = getattr(tts, "sample_rate", None)
+    sr = getattr(tts, "sample_rate", 48000) or 48000
+    result["sample_rate"] = sr
 
-    # --- infer ---
-    t2 = time.time()
-    kw = {
-        "style": args.style, "apply_watermark": False,
-        "temperature": args.temperature, "max_chars": args.max_chars,
-    }
-    # Giong clone (custom): nap TU DICT — khong can audio goc, khong enroll lai.
+    # --- resolve giong (1 lan) ---
+    # voice_file (clone dict) > voice (preset name) > default preset.
     if args.voice_file:
-        import numpy as np
         with open(args.voice_file, encoding="utf-8") as f:
             rec = json.load(f)
-        kw["voice"] = {
+        voice_arg = {
             "speaker_emb": np.asarray(rec["speaker_emb"], dtype=np.float32),
             "codes": None if rec.get("codes") is None else np.asarray(rec["codes"], dtype=np.int64),
             "style": rec.get("style", args.style),
         }
         result["voice_src"] = "clone_dict"
     elif args.voice:
-        kw["voice"] = args.voice
+        voice_arg = args.voice
         result["voice_src"] = "preset"
     else:
+        voice_arg = None
         result["voice_src"] = "default"
-    audio = tts.infer(text, **kw)
+    speaker_emb, ref_codes = tts._resolve_ref(
+        voice=voice_arg, ref_audio=None, denoise=False, use_ref_codes=True)
+
+    # --- infer THEO CHUNK (bao PROGRESS moi chunk) ---
+    chunks, gaps = normalize_to_chunks_v3_with_gaps(text, max_chars=args.max_chars)
+    n_chunks = len(chunks)
+    result["n_chunks"] = n_chunks
+    if n_chunks == 0:
+        result["error"] = "text rong (0 chunk)"
+        print("RESULT_JSON:" + json.dumps(result, ensure_ascii=False))
+        return 1
+
+    _emit(f"PROGRESS:phase=synth total={n_chunks}")
+    t2 = time.time()
+    all_wavs = []
+    for i, chunk in enumerate(chunks):
+        ph = phonemize_text_with_emotions(chunk)
+        wav = tts.engine.infer(
+            phonemes=ph, speaker_emb=speaker_emb, ref_codes=ref_codes,
+            style=args.style, use_ref_codes=ref_codes is not None,
+            temperature=args.temperature, max_new_frames=args.max_new_frames)
+        if wav is not None and len(wav) > 0:
+            all_wavs.append(wav)
+        _emit(f"PROGRESS:chunk={i + 1} total={n_chunks}")
     result["t_infer_s"] = round(time.time() - t2, 2)
+
+    if not all_wavs:
+        result["error"] = "khong sinh duoc audio"
+        print("RESULT_JSON:" + json.dumps(result, ensure_ascii=False))
+        return 1
+
+    audio = join_audio_chunks(all_wavs, sr, silence_ps=gaps_to_silence(gaps))
 
     # --- save ---
     t3 = time.time()
     tts.save(audio, args.out)
     result["t_save_s"] = round(time.time() - t3, 2)
 
-    sr = result["sample_rate"] or 48000
     dur = len(audio) / sr
     result["audio_sec"] = round(dur, 2)
     result["rtf_x"] = round(dur / result["t_infer_s"], 2) if result["t_infer_s"] else None

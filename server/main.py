@@ -1,19 +1,21 @@
 """main — entrypoint kích hoạt ứng dụng (tầng ngoài cùng của server/).
 
-Chạy ``main.py`` bật CÙNG LÚC 2 server trên 2 cổng khác nhau:
-  • API  (FastAPI, cổng PORT=7862)      — /api/v1 + /docs Swagger + /files.
-  • Giao diện (static, cổng DEMO_PORT=7870) — phục vụ repo-root/demo/index.html,
-    file này gọi ngược lại API qua CORS.
+Chạy ``main.py`` bật MỘT server trên MỘT cổng (PORT=7862):
+  • Giao diện tại  ``/``          — phục vụ repo-root/ui/index.html (cùng origin).
+  • API tại        ``/api/v1``    — + /docs Swagger + /files.
+
+Cùng cổng vì môi trường deploy (CT3600) chỉ mở đúng 1 cổng 7862. Giao diện gọi
+API bằng đường DẪN TƯƠNG ĐỐI (cùng origin) nên không cần CORS và chạy được sau
+mọi proxy/domain. Tắt giao diện: ``VIENEU_SERVE_UI=0``.
 
 Chạy:
     uv run python server/main.py
-    # hoặc chỉ API: uv run uvicorn server.main:app --host 0.0.0.0 --port 7862
+    # hoặc: uv run uvicorn server.main:app --host 0.0.0.0 --port 7862
 """
 from __future__ import annotations
 
 import logging
 import sys
-import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -90,7 +92,8 @@ app = FastAPI(
 if settings.FORCE_HTTPS:
     app.add_middleware(_ForceHttpsProto)
 
-# CORS — giao diện chạy ở cổng khác nên trình duyệt cần API cho phép cross-origin.
+# CORS — giao diện giờ CÙNG origin (phục vụ tại "/"), không cần CORS. Giữ lại
+# cho trường hợp gọi API từ origin khác (đặt VIENEU_API_BASE / client ngoài).
 _origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
@@ -129,49 +132,31 @@ def api_root() -> JSONResponse:
     })
 
 
-# ── Giao diện demo — app RIÊNG, chạy CỔNG RIÊNG (tách ngoài server/) ──────────
-def build_demo_app() -> FastAPI:
-    """Dựng app tĩnh phục vụ repo-root/demo/index.html.
+# ── Giao diện UI — phục vụ tại "/" NGAY TRÊN app API (cùng cổng 7862) ─────────
+# BE không dùng "/" (chỉ /api, /api/v1/*, /files, /docs) nên giao diện ở gốc.
+# HTML gọi API bằng đường dẫn tương đối (window.__API_BASE__ để rỗng = cùng
+# origin) → không cần CORS, chạy sau mọi proxy/domain của CT3600.
+if settings.SERVE_UI:
+    _UI_INDEX = Path(settings.UI_DIR) / "index.html"
 
-    Trang này gọi ngược lại API. URL API được nhúng vào HTML lúc phục vụ (biến
-    ``window.__API_BASE__``) để giao diện biết cổng API mà không hardcode.
-    """
-    demo = FastAPI(title="VieNeu-TTS Demo UI", docs_url=None, redoc_url=None,
-                   openapi_url=None)
-    demo_dir = Path(settings.DEMO_DIR)
-    index = demo_dir / "index.html"
-
-    @demo.get("/", response_class=HTMLResponse)
-    def _index() -> HTMLResponse:
-        if not index.is_file():
-            return HTMLResponse(f"<h1>Không tìm thấy giao diện</h1><p>{index}</p>", status_code=404)
-        html = index.read_text(encoding="utf-8")
-        # Nhúng API base để HTML gọi đúng cổng API (khác cổng giao diện).
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    def ui_index() -> HTMLResponse:
+        if not _UI_INDEX.is_file():
+            return HTMLResponse(f"<h1>Không tìm thấy giao diện</h1><p>{_UI_INDEX}</p>",
+                                status_code=404)
+        html = _UI_INDEX.read_text(encoding="utf-8")
+        # API_BASE_URL mặc định rỗng → giao diện gọi API tương đối, cùng origin.
         inject = f'<script>window.__API_BASE__="{settings.API_BASE_URL}";</script>'
         html = html.replace("</head>", f"{inject}\n</head>", 1)
         return HTMLResponse(html)
-
-    return demo
-
-
-def _run_demo() -> None:
-    import uvicorn
-    demo_app = build_demo_app()
-    logger.info("🖥️  Giao diện demo on http://%s:%d → API %s",
-                settings.HOST, settings.DEMO_PORT, settings.API_BASE_URL)
-    uvicorn.run(demo_app, host=settings.HOST, port=settings.DEMO_PORT,
-                log_level="warning")
 
 
 def main() -> None:
     import uvicorn
 
-    # Giao diện chạy ở thread nền (cổng riêng); API giữ luồng chính.
-    if settings.SERVE_DEMO:
-        threading.Thread(target=_run_demo, daemon=True, name="demo-ui").start()
-
-    logger.info("🚀 VieNeu-TTS API on http://%s:%d (docs: /docs, api: %s)",
-                settings.HOST, settings.PORT, API_PREFIX)
+    ui_note = f"UI: /  ·  " if settings.SERVE_UI else ""
+    logger.info("🚀 VieNeu-TTS on http://%s:%d (%sdocs: /docs, api: %s)",
+                settings.HOST, settings.PORT, ui_note, API_PREFIX)
     uvicorn.run(app, host=settings.HOST, port=settings.PORT,
                 proxy_headers=True, forwarded_allow_ips="*")
 

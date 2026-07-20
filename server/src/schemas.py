@@ -62,6 +62,10 @@ class JobStatus(BaseModel):
     elapsed_sec: Optional[float] = None
     sample_rate: Optional[int] = None
     error: Optional[str] = None
+    # ── Chỉ có ở GPU mode (truy vết máy Vast.ai + tiền) ──────────────────────
+    instance_id: Optional[int] = Field(default=None, description="(GPU) id máy Vast.ai đang thuê.")
+    dph: Optional[float] = Field(default=None, description="(GPU) giá $/giờ của máy đang thuê.")
+    est_cost: Optional[float] = Field(default=None, description="(GPU) tiền ước tính đã tốn ($).")
     download_url: Optional[str] = Field(default=None, description="Có khi status=done.")
     created_at: datetime
     updated_at: datetime
