@@ -58,11 +58,19 @@ class V3TurboVieNeuTTS(BaseVieneuTTS):
             # model repo (uploaded separately).
             from ._v3_turbo_engine.onnx_runtime_lite import OnnxV3LiteEngine
             logger.info(f"⏳ Loading VieNeu-TTS v3 Turbo (ONNX/CPU) from: {backbone_repo}/{onnx_subfolder} ...")
+            # threads: mặc định 0 = ONNX tự dò (= toàn bộ nhân). Trên máy NHIỀU NHÂN
+            # trong LXC/container, ONNX cố set affinity trên nhân bị mask → lỗi
+            # pthread_setaffinity_np + thread thrashing → CHẬM HƠN nhiều. Đặt
+            # VIENEU_ONNX_THREADS (vd 8) để giới hạn tường minh. Workload này sinh
+            # tuần tự từng frame (batch=1) nên >8 thread hầu như không giúp thêm.
+            import os as _os
+            _onnx_threads = int(_os.getenv("VIENEU_ONNX_THREADS", "0") or 0)
             self.engine = OnnxV3LiteEngine(
                 checkpoint_path=backbone_repo,
                 onnx_repo=onnx_repo,
                 onnx_dir=onnx_dir,
                 onnx_subfolder=onnx_subfolder,
+                threads=_onnx_threads,
             )
             self.backend = "onnx"
         else:

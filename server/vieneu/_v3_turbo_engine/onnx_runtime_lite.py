@@ -141,7 +141,15 @@ class OnnxV3LiteEngine:
         # ── ONNX sessions ──────────────────────────────────────────────────────
         so = ort.SessionOptions()
         if threads and threads > 0:
+            # Giới hạn thread tường minh: tránh lỗi pthread_setaffinity_np + thread
+            # thrashing khi ONNX tự dò ALL cores trong LXC/container bị mask CPU.
             so.intra_op_num_threads = threads
+            so.inter_op_num_threads = 1
+            # Không cho worker thread spin-wait (đỡ ngốn CPU + tránh set affinity).
+            try:
+                so.add_session_config_entry("session.intra_op.allow_spinning", "0")
+            except Exception:
+                pass
         prov = ["CPUExecutionProvider"]
         self.sess_pre = ort.InferenceSession(str(vd / "vieneu_prefill.onnx"), so, providers=prov)
         self.sess_dec = ort.InferenceSession(str(vd / "vieneu_decode_step.onnx"), so, providers=prov)
