@@ -1,4 +1,4 @@
-"""createVoice — orchestrator cho API tạo TTS (điểm rẽ nhánh CPU/GPU).
+"""create_audio — orchestrator cho API tạo TTS (điểm rẽ nhánh CPU/GPU).
 
 Luồng: controller nhận request → gọi ``create()`` ở đây → check đủ điều kiện
 (model sẵn sàng, voice tồn tại, ngưỡng ký tự cho GPU) → CHỐT mode → tạo job

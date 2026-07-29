@@ -23,7 +23,7 @@ from .schemas import (
     ModesResponse, StylesResponse, TTSCreate, VoiceInfo, VoicesResponse,
 )
 from .services import catalog as catalog_svc
-from .services import createVoice, voices as voice_svc
+from .services import create_audio, voices as voice_svc
 from .services.jobs import ACTIVE_STATUSES, DONE, Job, manager
 
 API_PREFIX = settings.API_PREFIX
@@ -152,9 +152,9 @@ def create_tts(req: TTSCreate, x_user_id: Optional[str] = _UID) -> JobCreated:
     (BE chặn thêm 1 lớp). Poll ``GET /tts/{id}`` xem %, ``DELETE`` để hủy,
     ``GET /tts/{id}/download`` tải WAV khi xong."""
     try:
-        job = createVoice.create(req.text, req.voice, req.style, req.temperature,
-                                 req.max_chars, mode=req.mode, user_ref=_user(x_user_id))
-    except createVoice.CreateError as e:
+        job = create_audio.create(req.text, req.voice, req.style, req.temperature,
+                                  req.max_chars, mode=req.mode, user_ref=_user(x_user_id))
+    except create_audio.CreateError as e:
         raise HTTPException(e.status, e.detail)
     return JobCreated(id=job.id, status=job.status, mode=job.mode,
                       poll_url=f"{API_PREFIX}/tts/{job.id}",

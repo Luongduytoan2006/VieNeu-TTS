@@ -37,11 +37,26 @@ class V3TurboVieNeuTTS(BaseVieneuTTS):
         backend: str = "auto",   # "auto" → ONNX on CPU, PyTorch on GPU; "onnx"|"pytorch" to force
         onnx_repo: Optional[str] = None,
         onnx_dir: Optional[str] = None,
-        onnx_subfolder: str = "onnx_update",
+        precision: str = "int8",   # ONNX/CPU backbone: "int8" (mặc định, nhanh ~3x/frame, nhỏ 4x) | "fp32" (chất-lượng-tối-đa)
+        onnx_subfolder: Optional[str] = None,   # override thủ công subfolder; None → suy từ `precision`
+        threads: int = 0,   # ONNX/CPU intra-op threads; 0 = mặc định engine (~nhân vật lý, cap 8). Đặt số cụ thể để tinh chỉnh.
+        max_batch_size: int = 32,   # GPU/PyTorch: trần số chunk gộp vào một forward (static batching). Batch thực = min(số_chunk, max_batch_size). Bỏ qua trên CPU/ONNX.
         **kwargs: Any,
     ):
         super().__init__()
         self.sample_rate = 48_000
+
+        # Override thủ công số thread ONNX qua env (hữu ích trong LXC/container bị mask
+        # CPU): VIENEU_ONNX_THREADS thắng khi caller không truyền `threads`. 0 = để engine
+        # tự quyết (tác giả cap ~cpu//2, max 8). Chỉ áp đường ONNX/CPU.
+        if not threads:
+            import os as _os
+            threads = int(_os.getenv("VIENEU_ONNX_THREADS", "0") or 0)
+
+        # `precision` chỉ áp cho đường ONNX/CPU (chọn subfolder graph int8 vs fp32).
+        # Đường PyTorch/GPU dùng torch fp32/bf16, không liên quan.
+        if onnx_subfolder is None:
+            onnx_subfolder = {"int8": "onnx_int8", "fp32": "onnx_update"}.get(str(precision).lower(), "onnx_int8")
 
         if device in (None, "auto"):
             try:
@@ -58,19 +73,12 @@ class V3TurboVieNeuTTS(BaseVieneuTTS):
             # model repo (uploaded separately).
             from ._v3_turbo_engine.onnx_runtime_lite import OnnxV3LiteEngine
             logger.info(f"⏳ Loading VieNeu-TTS v3 Turbo (ONNX/CPU) from: {backbone_repo}/{onnx_subfolder} ...")
-            # threads: mặc định 0 = ONNX tự dò (= toàn bộ nhân). Trên máy NHIỀU NHÂN
-            # trong LXC/container, ONNX cố set affinity trên nhân bị mask → lỗi
-            # pthread_setaffinity_np + thread thrashing → CHẬM HƠN nhiều. Đặt
-            # VIENEU_ONNX_THREADS (vd 8) để giới hạn tường minh. Workload này sinh
-            # tuần tự từng frame (batch=1) nên >8 thread hầu như không giúp thêm.
-            import os as _os
-            _onnx_threads = int(_os.getenv("VIENEU_ONNX_THREADS", "0") or 0)
             self.engine = OnnxV3LiteEngine(
                 checkpoint_path=backbone_repo,
                 onnx_repo=onnx_repo,
                 onnx_dir=onnx_dir,
                 onnx_subfolder=onnx_subfolder,
-                threads=_onnx_threads,
+                threads=threads,
             )
             self.backend = "onnx"
         else:
@@ -90,6 +98,10 @@ class V3TurboVieNeuTTS(BaseVieneuTTS):
         self._preset_voices: dict = {}
         self._default_voice: Optional[str] = None
         self._load_v3_voices()
+
+        # Static-batching (GPU/PyTorch). Dựng lười ở lần batch đầu; None trên CPU/ONNX.
+        self.max_batch_size = max(1, int(max_batch_size))
+        self._batch_engine = None
 
     # ── Preset voices (speaker embedding + reference codes) ─────────────────────
     def _load_v3_voices(self) -> None:
@@ -229,6 +241,63 @@ class V3TurboVieNeuTTS(BaseVieneuTTS):
         codes = preset.get("codes") if use_ref_codes else None
         return preset["speaker_emb"], codes
 
+    # ── Batched inference (GPU/PyTorch) ──────────────────────────────────────
+    def _get_batch_engine(self):
+        """Lazily build the static-batching engine. Returns ``None`` on CPU/ONNX.
+
+        The batching runtime (``vieneu.v3_turbo_serve``) is pure PyTorch/CUDA, so it
+        only applies to the ``pytorch`` backend. Importing it is deferred until the
+        first batched call to keep the torch-free CPU path from touching torch.
+        """
+        if self.backend != "pytorch":
+            return None
+        if self._batch_engine is None:
+            from .v3_turbo_serve import V3TurboBatchEngine
+            self._batch_engine = V3TurboBatchEngine(self.engine)
+        return self._batch_engine
+
+    def _infer_chunks(
+        self,
+        chunks: List[str],
+        speaker_emb: np.ndarray,
+        ref_codes: Optional[np.ndarray],
+        style: str,
+        use_ref_codes: bool,
+        batch_size: int,
+        sampling: dict,
+    ) -> List[np.ndarray]:
+        """Synthesize one waveform per chunk (no join, no watermark).
+
+        On the PyTorch/GPU backend with ``batch_size > 1`` and more than one chunk,
+        the chunks are pushed through the static-batching engine in groups of
+        ``batch_size`` (chunks share each forward step — the throughput win). On CPU
+        (ONNX) or a single chunk, each chunk goes through the single-sequence engine
+        sequentially. Output order always matches ``chunks``.
+        """
+        n = len(chunks)
+        engine = self._get_batch_engine() if (batch_size > 1 and n > 1) else None
+
+        if engine is None:
+            wavs: List[np.ndarray] = []
+            for chunk in chunks:
+                ph = phonemize_text_with_emotions(chunk)
+                wavs.append(self.engine.infer(
+                    phonemes=ph, speaker_emb=speaker_emb, ref_codes=ref_codes,
+                    style=style, use_ref_codes=use_ref_codes, **sampling,
+                ))
+            return wavs
+
+        wavs = []
+        for i in range(0, n, batch_size):
+            group = chunks[i:i + batch_size]
+            reqs = [{
+                "phonemes": phonemize_text_with_emotions(c),
+                "speaker_emb": speaker_emb, "ref_codes": ref_codes,
+                "style": style, "use_ref_codes": use_ref_codes,
+            } for c in group]
+            wavs.extend(engine.generate_batch(reqs, **sampling))
+        return wavs
+
     # ── Public API ───────────────────────────────────────────────────────────
     def infer(
         self,
@@ -247,6 +316,7 @@ class V3TurboVieNeuTTS(BaseVieneuTTS):
         silence_p: float = 0.15,
         crossfade_p: float = 0.0,
         apply_watermark: bool = True,
+        batch_size: Optional[int] = None,   # GPU: trần chunk/forward (None → self.max_batch_size; 1 → tắt batch)
         **kwargs: Any,
     ) -> np.ndarray:
         speaker_emb, ref_codes = self._resolve_ref(voice, ref_audio, denoise, use_ref_codes)
@@ -255,16 +325,15 @@ class V3TurboVieNeuTTS(BaseVieneuTTS):
         if not chunks:
             return np.array([], dtype=np.float32)
 
-        all_wavs: List[np.ndarray] = []
-        for chunk in chunks:
-            ph = phonemize_text_with_emotions(chunk)
-            wav = self.engine.infer(
-                phonemes=ph, speaker_emb=speaker_emb, ref_codes=ref_codes,
-                style=style, use_ref_codes=use_ref_codes,
-                temperature=temperature, top_k=top_k, top_p=top_p,
-                max_new_frames=max_new_frames, repetition_penalty=repetition_penalty,
-            )
-            all_wavs.append(wav)
+        bs = self.max_batch_size if batch_size is None else max(1, int(batch_size))
+        sampling = dict(
+            temperature=temperature, top_k=top_k, top_p=top_p,
+            max_new_frames=max_new_frames, repetition_penalty=repetition_penalty,
+        )
+        # GPU gộp các chunk vào cùng forward; CPU/1-chunk chạy tuần tự (xem _infer_chunks).
+        all_wavs = self._infer_chunks(
+            chunks, speaker_emb, ref_codes, style, use_ref_codes, bs, sampling
+        )
 
         # Im lặng theo loại ranh giới: ngắt đoạn > hết câu > ngắt trong câu.
         final_wav = join_audio_chunks(
@@ -316,8 +385,77 @@ class V3TurboVieNeuTTS(BaseVieneuTTS):
                 )
                 yield self._apply_watermark(wav) if apply_watermark else wav
 
-    def infer_batch(self, texts: List[str], apply_watermark: bool = True, **kwargs: Any) -> List[np.ndarray]:
-        return [self.infer(t, apply_watermark=apply_watermark, **kwargs) for t in texts]
+    def infer_batch(
+        self,
+        texts: List[str],
+        ref_audio: Optional[Union[str, Path]] = None,
+        voice: Optional[Union[str, dict]] = None,
+        style: str = "tu_nhien",
+        denoise: bool = True,
+        use_ref_codes: bool = True,
+        temperature: float = 0.8,
+        top_k: int = 25,
+        top_p: float = 0.95,
+        max_new_frames: int = 300,
+        repetition_penalty: float = 1.2,
+        max_chars: int = 256,
+        apply_watermark: bool = True,
+        batch_size: Optional[int] = None,
+        **kwargs: Any,
+    ) -> List[np.ndarray]:
+        """Synthesize many texts, returning one waveform each (same order as ``texts``).
+
+        All texts share one voice/style (resolved once). On the PyTorch/GPU backend the
+        chunks from *every* text are flattened and batched together in groups of
+        ``batch_size`` — so even many short texts fill the batch and share forward steps.
+        On CPU (ONNX) this runs sequentially. Output equals per-text ``infer`` (equivalent,
+        not bit-identical to the single path, since sampling runs batched).
+        """
+        if not texts:
+            return []
+
+        speaker_emb, ref_codes = self._resolve_ref(voice, ref_audio, denoise, use_ref_codes)
+        bs = self.max_batch_size if batch_size is None else max(1, int(batch_size))
+        sampling = dict(
+            temperature=temperature, top_k=top_k, top_p=top_p,
+            max_new_frames=max_new_frames, repetition_penalty=repetition_penalty,
+        )
+
+        # Cắt chunk từng text, nhớ chunk thuộc text nào (owner) và gaps để join lại.
+        per_text_gaps: List[Any] = []
+        flat_chunks: List[str] = []
+        owner: List[int] = []
+        for ti, t in enumerate(texts):
+            chunks, gaps = normalize_to_chunks_v3_with_gaps(t, max_chars=max_chars)
+            per_text_gaps.append(gaps)
+            for c in chunks:
+                flat_chunks.append(c)
+                owner.append(ti)
+
+        empty = np.array([], dtype=np.float32)
+        if not flat_chunks:
+            return [empty for _ in texts]
+
+        flat_wavs = self._infer_chunks(
+            flat_chunks, speaker_emb, ref_codes, style, use_ref_codes, bs, sampling
+        )
+
+        # Gom wav về đúng text (thứ tự flat_wavs khớp flat_chunks/owner), rồi join từng text.
+        grouped: List[List[np.ndarray]] = [[] for _ in texts]
+        for w, ti in zip(flat_wavs, owner):
+            grouped[ti].append(w)
+
+        results: List[np.ndarray] = []
+        for ti in range(len(texts)):
+            if not grouped[ti]:
+                results.append(empty)
+                continue
+            joined = join_audio_chunks(
+                grouped[ti], self.sample_rate, silence_ps=gaps_to_silence(per_text_gaps[ti])
+            )
+            results.append(self._apply_watermark(joined) if apply_watermark else joined)
+        return results
 
     def close(self) -> None:
         self.engine = None
+        self._batch_engine = None

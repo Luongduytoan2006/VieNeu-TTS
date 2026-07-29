@@ -34,7 +34,7 @@ API_V1 = "https://console.vast.ai/api/v1"
 
 # Script chạy trên máy GPU (SCP lên cùng code engine). Nằm cạnh file này.
 _HERE = Path(__file__).resolve().parent
-SYNTH_JOB = _HERE / "gpu_job" / "synth_job.py"
+SYNTH_JOB = _HERE / "synth_job.py"
 # Code engine tác giả để SCP lên máy (không phụ thuộc git đã push).
 _SERVER = _HERE.parents[1]                       # server/
 CODE_DIRS = [_SERVER / "vieneu", _SERVER / "vieneu_utils"]
@@ -284,7 +284,8 @@ class VastAIClient:
     # ── Bước cao cấp: đưa code lên + chạy synth + tải WAV về ───────────────────
     def setup_and_synth(self, text: str, voice: Optional[str], style: str,
                         out_wav: Path, *, temperature: float = 0.8,
-                        max_chars: int = 256, voice_rec: Optional[dict] = None,
+                        max_chars: int = 256, batch_size: int = 32,
+                        voice_rec: Optional[dict] = None,
                         on_progress=None) -> dict:
         """SCP code+script → pip deps → chạy synth_job → tải WAV về ``out_wav``.
 
@@ -338,6 +339,7 @@ class VastAIClient:
         cmd = (f"cd /workspace && PYTHONPATH=/workspace HF_HUB_ENABLE_HF_TRANSFER=0 "
                f'PYTHONUNBUFFERED=1 python synth_job.py --out /workspace/out.wav '
                f'--style {style} --temperature {temperature} --max-chars {max_chars} '
+               f'--batch-size {batch_size} '
                f'--text-file /workspace/{text_local.name} {voice_arg}')
 
         # Đọc stdout synth_job REAL-TIME → map PROGRESS thành % (bò dần như CPU):
@@ -456,7 +458,8 @@ def run(job) -> None:
 
         result = client.setup_and_synth(
             job.text, job.voice, job.style, out_wav,
-            temperature=job.temperature, max_chars=job.max_chars, voice_rec=voice_rec,
+            temperature=job.temperature, max_chars=job.max_chars,
+            batch_size=settings.VAST_BATCH_SIZE, voice_rec=voice_rec,
             on_progress=_prog)
         if job.cancel.is_set():
             job.status = CANCELLED

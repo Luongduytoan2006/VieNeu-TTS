@@ -31,3 +31,5 @@ merged_models_cache/
 .ask/
 tmp/
 .claude/
+
+logs

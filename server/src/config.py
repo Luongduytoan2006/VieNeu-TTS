@@ -65,7 +65,7 @@ class Settings:
 
     # ── Ngưỡng chọn mode ─────────────────────────────────────────────────────
     # GPU chỉ được phép khi context đủ dài (đếm SỐ TỪ, tách theo khoảng trắng).
-    # FE đã chặn 1 lớp; BE chặn thêm lớp nữa ở services/createVoice.py.
+    # FE đã chặn 1 lớp; BE chặn thêm lớp nữa ở services/create_audio.py.
     GPU_MIN_WORDS: int = int(os.getenv("VIENEU_GPU_MIN_WORDS", "1000"))
 
     # ── Storage (audio kết quả) ──────────────────────────────────────────────
@@ -98,6 +98,10 @@ class Settings:
     VAST_BOOT_TIMEOUT: int = int(os.getenv("VAST_BOOT_TIMEOUT", "600"))   # chờ running (s)
     VAST_JOB_TIMEOUT: int = int(os.getenv("VAST_JOB_TIMEOUT", "1200"))    # chờ synth (s)
     VAST_POLL_SEC: int = int(os.getenv("VAST_POLL_SEC", "30"))            # nhịp poll (tiền thật!)
+    # Số chunk sinh SONG SONG mỗi lượt trên GPU (static-batching của tác giả). Đây là
+    # cách 1 văn bản dài của 1 người chạy song song trên GPU thay vì tuần tự. 1 = tắt.
+    # Điểm ngọt ~32 (RTX 3060/4060); GPU lớn hơn có thể tăng. Chỉ áp đường GPU/PyTorch.
+    VAST_BATCH_SIZE: int = int(os.getenv("VAST_BATCH_SIZE", "32"))
 
     # ── Giao diện UI (phục vụ tại "/" NGAY TRÊN app API, cùng cổng PORT) ──────
     # main.py phục vụ ui/index.html tại "/". Tắt: =0.

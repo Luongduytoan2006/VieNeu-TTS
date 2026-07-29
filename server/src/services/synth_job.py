@@ -4,10 +4,15 @@ Nhận 1 đoạn text, nạp engine VieNeu v3 Turbo (PyTorch/CUDA), sinh audio T
 CHUNK (giống đường CPU in-process) để BÁO TIẾN ĐỘ real-time, lưu WAV, và in TIMING
 từng bước ra stdout dạng JSON dòng cuối (prefix ``RESULT_JSON:``).
 
+GPU gộp nhiều chunk SONG SONG mỗi lượt (static-batching của tác giả:
+``vieneu.v3_turbo_serve.V3TurboBatchEngine``) — đây là cách 1 văn bản dài của 1
+người chạy song song trên GPU thay vì tuần tự. ``--batch-size`` (mặc định 32) là
+trần chunk/lượt; 1 = tuần tự. CPU/ONNX luôn tuần tự.
+
 Tiến độ real-time (orchestrator ở VPS đọc stdout live để cập nhật job.progress):
 * ``PROGRESS:phase=load_model``            — bắt đầu nạp model (tải HF lần đầu).
 * ``PROGRESS:phase=synth total=N``         — model xong, bắt đầu synth N chunk.
-* ``PROGRESS:chunk=i total=N``             — vừa synth xong chunk thứ i.
+* ``PROGRESS:chunk=i total=N``             — vừa synth xong i chunk (nhảy theo lượt batch).
 Mỗi dòng PROGRESS được flush ngay để VPS nhận tức thì (không đợi buffer).
 
 Chạy:  python synth_job.py --out /workspace/out.wav [--text-file f.txt] [--voice "Ngọc Lan"]
@@ -60,6 +65,9 @@ def main():
     ap.add_argument("--temperature", type=float, default=0.8)
     ap.add_argument("--max-chars", type=int, default=256)
     ap.add_argument("--max-new-frames", type=int, default=300)
+    ap.add_argument("--batch-size", type=int, default=32,
+                    help="So chunk sinh SONG SONG moi luot tren GPU (static-batching tac gia). "
+                         "1 = tuan tu. Bo qua tren CPU/ONNX.")
     args = ap.parse_args()
 
     text = DEFAULT_TEXT
@@ -124,16 +132,46 @@ def main():
 
     _emit(f"PROGRESS:phase=synth total={n_chunks}")
     t2 = time.time()
-    all_wavs = []
-    for i, chunk in enumerate(chunks):
-        ph = phonemize_text_with_emotions(chunk)
-        wav = tts.engine.infer(
-            phonemes=ph, speaker_emb=speaker_emb, ref_codes=ref_codes,
-            style=args.style, use_ref_codes=ref_codes is not None,
-            temperature=args.temperature, max_new_frames=args.max_new_frames)
-        if wav is not None and len(wav) > 0:
-            all_wavs.append(wav)
-        _emit(f"PROGRESS:chunk={i + 1} total={n_chunks}")
+
+    # Sinh audio: GPU gộp nhiều chunk SONG SONG (static-batching của tác giả:
+    # V3TurboBatchEngine), CPU/1-chunk thì tuần tự. Đây là cách 1 văn bản dài của
+    # 1 người được chạy song song trên GPU. Length-bucketing (gom chunk xấp xỉ dài
+    # bằng nhau) giảm phí do EOS lệch. Giữ đúng thứ tự gốc để ghép.
+    all_wavs = [None] * n_chunks
+    bs = max(1, int(args.batch_size))
+    use_batch = (dev == "cuda" and bs > 1 and n_chunks > 1
+                 and getattr(tts, "backend", "") == "pytorch")
+    result["batch_size"] = bs if use_batch else 1
+
+    if use_batch:
+        from vieneu.v3_turbo_serve import V3TurboBatchEngine
+        be = V3TurboBatchEngine(tts.engine)
+        order = sorted(range(n_chunks), key=lambda k: len(chunks[k]))
+        sampling = dict(temperature=args.temperature, max_new_frames=args.max_new_frames)
+        done = 0
+        for s in range(0, n_chunks, bs):
+            grp = order[s:s + bs]
+            reqs = [{
+                "phonemes": phonemize_text_with_emotions(chunks[k]),
+                "speaker_emb": speaker_emb, "ref_codes": ref_codes,
+                "style": args.style, "use_ref_codes": ref_codes is not None,
+            } for k in grp]
+            wavs = be.generate_batch(reqs, **sampling)
+            for k, w in zip(grp, wavs):
+                all_wavs[k] = w if (w is not None and len(w) > 0) else None
+            done += len(grp)
+            _emit(f"PROGRESS:chunk={done} total={n_chunks}")
+    else:
+        for i, chunk in enumerate(chunks):
+            ph = phonemize_text_with_emotions(chunk)
+            wav = tts.engine.infer(
+                phonemes=ph, speaker_emb=speaker_emb, ref_codes=ref_codes,
+                style=args.style, use_ref_codes=ref_codes is not None,
+                temperature=args.temperature, max_new_frames=args.max_new_frames)
+            all_wavs[i] = wav if (wav is not None and len(wav) > 0) else None
+            _emit(f"PROGRESS:chunk={i + 1} total={n_chunks}")
+
+    all_wavs = [w for w in all_wavs if w is not None and len(w) > 0]
     result["t_infer_s"] = round(time.time() - t2, 2)
 
     if not all_wavs:
