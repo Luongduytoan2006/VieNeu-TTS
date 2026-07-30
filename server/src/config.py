@@ -48,6 +48,13 @@ class Settings:
     # Mặc định "*" (mở) — thu hẹp bằng VIENEU_CORS_ORIGINS="http://a,http://b" khi prod.
     CORS_ORIGINS: str = os.getenv("VIENEU_CORS_ORIGINS", "*")
 
+    # ── API key (Bearer) ─────────────────────────────────────────────────────
+    # Mọi endpoint /api/v1/* (TRỪ /health) yêu cầu header:
+    #     Authorization: Bearer <ACCESS_SECRET_KEY>
+    # 1 mã dùng chung (shared secret) — caller gửi đúng mã này thì qua. RỖNG = tắt
+    # auth (hợp dev/test offline + chạy tay). Đặt key 36 ký tự khi prod.
+    API_KEY: str = os.getenv("ACCESS_SECRET_KEY", "").strip()
+
     # ── Model (CPU/in-process) ───────────────────────────────────────────────
     BACKBONE_REPO: str = os.getenv("VIENEU_BACKBONE_REPO", "pnnbao-ump/VieNeu-TTS-v3-Turbo")
     # device=auto → CUDA (PyTorch) nếu có, else ONNX/CPU. Server này mặc định CPU.

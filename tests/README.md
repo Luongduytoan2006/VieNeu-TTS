@@ -48,7 +48,7 @@ The same `def test_*` functions are pytest-compatible.
 ### What each backend test covers
 
 - **`test_routing.py`** — unit tests for `resolve_mode` + `count_words`
-  (`server/src/services/createVoice.py`). Short + `auto` → `cpu`; ≥ `GPU_MIN_WORDS`
+  (`server/src/services/create_audio.py`). Short + `auto` → `cpu`; ≥ `GPU_MIN_WORDS`
   words + `auto` → `gpu`; short + `gpu` → `CreateError(422)`; long + `gpu` → `gpu`;
   `cpu` always `cpu`; unknown mode → `422`; word counting + threshold boundary.
 - **`test_api_cpu.py`** — `fastapi.testclient.TestClient` against `server/main.py:app`

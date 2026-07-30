@@ -54,6 +54,11 @@
     <a id="docslink" href="#" style="color:var(--acc)">Swagger</a></div>
 
   <div class="card">
+    <label for="apikey">API key (Bearer) <span class="hint" style="display:inline">— gửi kèm <code>Authorization: Bearer …</code>, lưu trên trình duyệt này</span></label>
+    <input id="apikey" type="password" placeholder="Dán API key…" autocomplete="off" />
+  </div>
+
+  <div class="card">
     <div class="meta">
       <span><span class="dot" id="hdot"></span><span id="health">đang kiểm tra…</span></span>
       <span id="voicecount"></span>
@@ -103,7 +108,22 @@ let GPU_MIN = 1000, curMode = "auto", pollTimer = null, curJob = null;
 
 const wordCount = (s) => (s.trim().match(/\S+/g) || []).length;
 
-async function jget(p){ const r = await fetch(API+p); if(!r.ok) throw new Error((await r.json().catch(()=>({}))).detail||r.status); return r.json(); }
+// ── API key (Bearer) — 1 mã dùng chung, lưu localStorage trên máy này ─────────
+const KEY_STORE = "vieneu_api_key";
+const getKey = () => ($("apikey").value || "").trim();
+// Header Authorization chỉ gắn khi có key (BE bỏ auth nếu VIENEU_API_KEY rỗng).
+function authHeaders(extra){
+  const h = Object.assign({}, extra || {});
+  const k = getKey();
+  if(k) h["Authorization"] = "Bearer " + k;
+  return h;
+}
+
+async function jget(p){
+  const r = await fetch(API+p, {headers: authHeaders()});
+  if(!r.ok) throw new Error((await r.json().catch(()=>({}))).detail||r.status);
+  return r.json();
+}
 
 // ── init: health + voices + styles ──────────────────────────────────────────
 async function init(){
@@ -166,7 +186,8 @@ async function synth(){
                  style:$("style").value, mode:curMode };
   let res;
   try{
-    const r = await fetch(API+"/tts", {method:"POST", headers:{"Content-Type":"application/json"},
+    const r = await fetch(API+"/tts", {method:"POST",
+                                       headers:authHeaders({"Content-Type":"application/json"}),
                                        body:JSON.stringify(body)});
     res = await r.json();
     if(!r.ok) throw new Error(res.detail||r.status);
@@ -192,7 +213,13 @@ function poll(id, mode){
     } else if(j.status==="done"){
       done();
       $("status").innerHTML = `${badge} ✓ xong · ${j.duration_sec}s audio · ${j.elapsed_sec}s xử lý`;
-      const a=$("audio"); a.src = API+`/tts/${id}/download`; a.style.display="block"; a.play().catch(()=>{});
+      // Thẻ <audio src> KHÔNG gửi được header Bearer → tải bằng fetch rồi tạo blob URL.
+      try{
+        const r = await fetch(API+`/tts/${id}/download`, {headers: authHeaders()});
+        if(!r.ok) throw new Error((await r.json().catch(()=>({}))).detail||r.status);
+        const url = URL.createObjectURL(await r.blob());
+        const a=$("audio"); a.src = url; a.style.display="block"; a.play().catch(()=>{});
+      }catch(e){ $("status").innerHTML += ` <span class="err">(tải audio lỗi: ${e.message})</span>`; }
     } else if(j.status==="cancelled"){
       done(); $("status").innerHTML = `${badge} đã hủy.`;
     } else {
@@ -205,10 +232,17 @@ function done(){ $("go").disabled=false; $("cancel").style.display="none"; clear
 
 async function cancel(){
   if(!curJob) return;
-  await fetch(API+"/tts/"+curJob, {method:"DELETE"}).catch(()=>{});
+  await fetch(API+"/tts/"+curJob, {method:"DELETE", headers: authHeaders()}).catch(()=>{});
 }
 
 // ── wire ────────────────────────────────────────────────────────────────────
+// Key: nạp từ localStorage khi mở, lưu lại mỗi lần gõ, gọi lại init() để thử kết nối.
+$("apikey").value = localStorage.getItem(KEY_STORE) || "";
+$("apikey").addEventListener("input", ()=>{
+  localStorage.setItem(KEY_STORE, getKey());
+  clearTimeout(window._keyDebounce);
+  window._keyDebounce = setTimeout(init, 400);   // key đổi → thử lại health/voices
+});
 $("text").addEventListener("input", updateChars);
 $("go").addEventListener("click", synth);
 $("cancel").addEventListener("click", cancel);

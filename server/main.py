@@ -14,7 +14,9 @@ Chạy:
 """
 from __future__ import annotations
 
+import json
 import logging
+import secrets
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -56,6 +58,74 @@ class _ForceHttpsProto:
         await self.app(scope, receive, send)
 
 
+class _RequireApiKey:
+    """Bearer-token gate cho API (1 mã dùng chung). Bật khi ACCESS_SECRET_KEY != rỗng.
+
+    Mọi request tới ``/api/v1/*`` phải kèm header::
+
+        Authorization: Bearer <ACCESS_SECRET_KEY>
+
+    MIỄN key (public): ``/api/v1/health`` (health-check/monitor), OPTIONS (CORS
+    preflight), và mọi đường NGOÀI ``/api/v1`` (UI ``/``, ``/docs``, ``/openapi.json``,
+    ``/files/*``). Key rỗng → middleware này không được gắn (auth tắt hoàn toàn).
+
+    So khớp bằng ``secrets.compare_digest`` (chống timing attack). Đọc key runtime
+    từ ``settings`` nên đổi .env + restart là áp dụng.
+    """
+
+    _EXEMPT = (f"{API_PREFIX}/health",)   # path đầy đủ được miễn
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            return await self.app(scope, receive, send)
+
+        path = scope.get("path", "")
+        method = scope.get("method", "GET").upper()
+        needs_key = (
+            path.startswith(API_PREFIX)
+            and path not in self._EXEMPT
+            and method != "OPTIONS"
+        )
+        if needs_key and not self._authorized(scope):
+            return await self._deny(send)
+        await self.app(scope, receive, send)
+
+    @staticmethod
+    def _authorized(scope) -> bool:
+        expected = settings.API_KEY
+        if not expected:          # không nên xảy ra (middleware chỉ gắn khi có key)
+            return True
+        auth = ""
+        for name, value in scope.get("headers") or []:
+            if name.lower() == b"authorization":
+                auth = value.decode("latin-1")
+                break
+        prefix = "Bearer "
+        if not auth.startswith(prefix):
+            return False
+        token = auth[len(prefix):].strip()
+        return bool(token) and secrets.compare_digest(token, expected)
+
+    @staticmethod
+    async def _deny(send) -> None:
+        body = json.dumps(
+            {"detail": "Thiếu hoặc sai API key. Gửi header 'Authorization: Bearer <key>'."}
+        ).encode("utf-8")
+        await send({
+            "type": "http.response.start",
+            "status": 401,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"www-authenticate", b'Bearer realm="VieNeu-TTS"'),
+                (b"content-length", str(len(body)).encode("latin-1")),
+            ],
+        })
+        await send({"type": "http.response.body", "body": body})
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("🔧 CPU mode in-process; GPU mode qua Vast.ai on-demand (ngưỡng %d từ).",
@@ -83,7 +153,7 @@ app = FastAPI(
         "Backend TTS bất đồng bộ cho VieNeu-TTS v3 Turbo (48kHz). "
         "Job có uuid: tạo → poll % → hủy → tải WAV. CRUD giọng (voice cloning). "
         "2 mode: **CPU** (in-process, mặc định) và **GPU** (Vast.ai on-demand, context dài). "
-        "Không cần token."
+        "**Auth:** mọi endpoint (trừ `/health`) cần header `Authorization: Bearer <API_KEY>`."
     ),
     lifespan=lifespan,
     docs_url="/docs", redoc_url="/redoc", openapi_url="/openapi.json",
@@ -91,6 +161,14 @@ app = FastAPI(
 
 if settings.FORCE_HTTPS:
     app.add_middleware(_ForceHttpsProto)
+
+# API key (Bearer) — chỉ gắn khi có key. Rỗng = auth tắt (dev/test/chạy tay).
+# Đặt TRƯỚC CORS trong code để CORS bọc NGOÀI → response 401 vẫn có CORS header.
+if settings.API_KEY:
+    app.add_middleware(_RequireApiKey)
+    logger.info("🔐 API key bật — /api/v1/* (trừ /health) cần 'Authorization: Bearer <key>'.")
+else:
+    logger.warning("🔓 API key TẮT (ACCESS_SECRET_KEY rỗng) — mọi endpoint mở.")
 
 # CORS — giao diện giờ CÙNG origin (phục vụ tại "/"), không cần CORS. Giữ lại
 # cho trường hợp gọi API từ origin khác (đặt VIENEU_API_BASE / client ngoài).

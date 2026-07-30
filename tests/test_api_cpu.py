@@ -3,7 +3,7 @@
 Đặt ``MODEL_EAGER_LOAD=0`` + ``STORAGE_BACKEND=local`` TRƯỚC khi import ``main`` để
 lifespan KHÔNG nạp model (không cần GPU/mạng/HF). Các endpoint tra cứu (health,
 modes, styles) trả 200 không cần model. POST /tts:
-  * model chưa load           → 503 (chặn ở createVoice.create).
+  * model chưa load           → 503 (chặn ở create_audio.create).
   * model "load" + ngắn + gpu → 422 (lớp chặn GPU thứ 2 ở BE).
 
 Chạy được cả 2 cách:
@@ -23,13 +23,21 @@ if str(_SERVER) not in sys.path:
 
 os.environ["MODEL_EAGER_LOAD"] = "0"      # KHÔNG eager-load model ở startup
 os.environ["STORAGE_BACKEND"] = "local"   # không đụng R2
+os.environ["ACCESS_SECRET_KEY"] = ""      # TẮT auth: test 503/422 gọi API không kèm key
 # DB: dùng DATABASE_URL từ môi trường (Postgres). Test ghi/xóa 1 giọng tạm
 # user_ref='_test' nên không đụng dữ liệu thật.
 
 import main  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+from src.config import settings  # noqa: E402
 from src.engine import engine  # noqa: E402
 from src.repositories import voices_repo as repo  # noqa: E402
+
+# TẮT auth cho các test 503/422 ở đây (chúng gọi API không kèm key). settings là
+# singleton nạp 1 lần; nếu file test khác import config TRƯỚC (khi .env có key thật)
+# thì API_KEY đã != rỗng. Ghi đè runtime = "" → middleware _RequireApiKey bypass
+# (nó đọc settings.API_KEY mỗi request). Không phụ thuộc thứ tự import/CLI.
+settings.API_KEY = ""
 
 
 def _client() -> TestClient:

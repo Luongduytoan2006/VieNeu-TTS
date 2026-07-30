@@ -1,7 +1,7 @@
 """test_routing — kiểm tra phân luồng CPU/GPU (unit, OFFLINE).
 
 Test thuần logic ``resolve_mode`` + ``count_words`` trong
-``server/src/services/createVoice.py``. KHÔNG chạm model / Vast.ai / mạng.
+``server/src/services/create_audio.py``. KHÔNG chạm model / Vast.ai / mạng.
 
 Chạy được cả 2 cách:
   * pytest:  ../.venv/Scripts/python.exe -m pytest tests/test_routing.py -v
@@ -24,7 +24,7 @@ os.environ.setdefault("MODEL_EAGER_LOAD", "0")
 os.environ.setdefault("STORAGE_BACKEND", "local")
 
 from src.config import settings  # noqa: E402
-from src.services.createVoice import CreateError, count_words, resolve_mode  # noqa: E402
+from src.services.create_audio import CreateError, count_words, resolve_mode  # noqa: E402
 
 # 1000 từ (tách theo khoảng trắng) → đạt ngưỡng GPU mặc định (GPU_MIN_WORDS=1000).
 LONG_TEXT = " ".join(["từ"] * 1000)
