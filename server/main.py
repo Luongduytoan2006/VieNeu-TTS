@@ -27,9 +27,10 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.security import HTTPBearer
 
 from src.config import settings
 from src.controller import router as api_router
@@ -181,7 +182,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(api_router)
+bearer_scheme = HTTPBearer(auto_error=False)
+app.include_router(api_router, dependencies=[Depends(bearer_scheme)])
 
 
 # ── /files/{key} — phục vụ audio khi storage=local ────────────────────────────
