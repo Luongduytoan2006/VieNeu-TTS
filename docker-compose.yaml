@@ -37,6 +37,9 @@ services:
       - hf-cache:/root/.cache/huggingface
       # Audio local (khi STORAGE_BACKEND=local) — giữ trên host để xem.
       - ./server/data:/app/server/data
+      # Mount ui và server để sửa code/UI có hiệu lực ngay
+      - ./ui:/app/ui
+      - ./server:/app/server
     restart: unless-stopped
 
   # PostgreSQL — giọng custom của user + jobs. Credential lấy từ .env (POSTGRES_*).

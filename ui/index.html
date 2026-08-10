@@ -95,7 +95,48 @@
 
     <div class="bar"><i id="prog"></i></div>
     <div class="status" id="status"></div>
-    <audio id="audio" controls style="display:none"></audio>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 4px; font-size:16px; display:flex; align-items:center; gap:6px;">
+      🎙️ Nạp / Clone Giọng Mới
+    </h3>
+    <div class="sub" style="margin-bottom:12px;">Ghi âm từ Micro hoặc tải lên file mẫu audio 3–8s (rõ tiếng, không tạp âm) để nạp vào DB.</div>
+
+    <div class="row">
+      <div>
+        <label for="c_name">Tên / ID giọng (*)</label>
+        <input id="c_name" type="text" placeholder="Ví dụ: giong_minh_1" />
+      </div>
+      <div>
+        <label for="c_gender">Giới tính</label>
+        <select id="c_gender">
+          <option value="nam">Nam</option>
+          <option value="nu">Nữ</option>
+          <option value="khac">Khác</option>
+        </select>
+      </div>
+    </div>
+
+    <label for="c_desc">Mô tả giọng (tùy chọn)</label>
+    <input id="c_desc" type="text" placeholder="Ví dụ: Giọng đọc truyền cảm, ấm áp..." />
+
+    <label>Nguồn Audio mẫu (Ghi âm từ Micro hoặc Chọn File)</label>
+    <div class="row" style="margin-top:6px; align-items:center;">
+      <div style="flex:1;">
+        <button id="btn_rec" type="button" class="ghost" style="margin-top:0; width:100%;">🔴 Bắt đầu Ghi âm</button>
+      </div>
+      <div style="text-align:center; color:var(--mut); font-size:12px; min-width:30px;">hoặc</div>
+      <div style="flex:1;">
+        <input id="c_file" type="file" accept="audio/*" style="padding:6px; font-size:13px;" />
+      </div>
+    </div>
+
+    <div id="c_rec_status" class="status" style="font-size:12px; margin-top:6px;"></div>
+    <audio id="c_audio_preview" controls style="display:none; margin-top:10px; width:100%;"></audio>
+
+    <button id="c_go" style="background:var(--ok); width:100%; margin-top:16px;">➕ Nạp Giọng Vào Hệ Thống</button>
+    <div id="c_status" class="status"></div>
   </div>
 </div>
 
@@ -248,6 +289,165 @@ $("go").addEventListener("click", synth);
 $("cancel").addEventListener("click", cancel);
 document.querySelectorAll(".modes .opt").forEach(o =>
   o.addEventListener("click", ()=>setMode(o.dataset.mode)));
+// ── Voice Cloning: MediaRecorder + WAV Convert + Enroll API ─────────────────
+let mediaRecorder = null, audioChunks = [], recordedBlob = null;
+
+// Hàm convert bất kỳ Audio Blob (WebM/OGG) sang PCM WAV (16-bit) chuẩn
+async function blobToWavBlob(blob) {
+  const arrayBuffer = await blob.arrayBuffer();
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+  
+  const numOfChan = audioBuffer.numberOfChannels;
+  const sampleRate = audioBuffer.sampleRate;
+  const length = audioBuffer.length * numOfChan * 2 + 44;
+  const buffer = new ArrayBuffer(length);
+  const view = new DataView(buffer);
+  const channels = [];
+  let offset = 0, pos = 0;
+
+  function writeString(str) {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+    offset += str.length;
+  }
+  function setUint16(data) { view.setUint16(offset, data, true); offset += 2; }
+  function setUint32(data) { view.setUint32(offset, data, true); offset += 4; }
+
+  writeString('RIFF'); setUint32(length - 8); writeString('WAVE');
+  writeString('fmt '); setUint32(16); setUint16(1); setUint16(numOfChan);
+  setUint32(sampleRate); setUint32(sampleRate * numOfChan * 2);
+  setUint16(numOfChan * 2); setUint16(16);
+  writeString('data'); setUint32(length - 44);
+
+  for (let i = 0; i < numOfChan; i++) channels.push(audioBuffer.getChannelData(i));
+
+  while (pos < audioBuffer.length) {
+    for (let i = 0; i < numOfChan; i++) {
+      let sample = Math.max(-1, Math.min(1, channels[i][pos]));
+      sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767) | 0;
+      view.setInt16(offset, sample, true);
+      offset += 2;
+    }
+    pos++;
+  }
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+if ($("btn_rec")) {
+  $("btn_rec").addEventListener("click", async () => {
+    if (mediaRecorder && mediaRecorder.state === "recording") {
+      mediaRecorder.stop();
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunks = [];
+      recordedBlob = null;
+      mediaRecorder = new MediaRecorder(stream);
+      
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunks.push(e.data);
+      };
+
+      mediaRecorder.onstop = async () => {
+        const rawBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+        $("c_rec_status").innerHTML = `<span>⏳ Đang định dạng sang file WAV...</span>`;
+        try {
+          recordedBlob = await blobToWavBlob(rawBlob);
+          const url = URL.createObjectURL(recordedBlob);
+          $("c_audio_preview").src = url;
+          $("c_audio_preview").style.display = "block";
+          $("c_rec_status").innerHTML = `<span style="color:var(--ok)">✓ Đã ghi âm & chuyển sang WAV (${(recordedBlob.size/1024).toFixed(1)} KB). Bấm nút dưới để nạp!</span>`;
+        } catch (e) {
+          recordedBlob = rawBlob;
+          $("c_rec_status").innerHTML = `<span class="err">Lỗi chuyển định dạng: ${e.message}</span>`;
+        }
+        $("btn_rec").textContent = "🔴 Bắt đầu Ghi âm lại";
+        $("btn_rec").style.background = "transparent";
+        $("c_file").value = "";
+        stream.getTracks().forEach(t => t.stop());
+      };
+
+      mediaRecorder.start();
+      $("btn_rec").textContent = "⏹️ Dừng Ghi âm (Đang thu...)";
+      $("btn_rec").style.background = "rgba(239, 68, 68, 0.2)";
+      $("c_rec_status").innerHTML = `<span style="color:var(--err)">🔴 Đang ghi âm từ Micro... Hãy nói 3–8 giây rõ tiếng!</span>`;
+    } catch (err) {
+      $("c_rec_status").innerHTML = `<span class="err">Không truy cập được Micro: ${err.message}</span>`;
+    }
+  });
+}
+
+if ($("c_file")) {
+  $("c_file").addEventListener("change", (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      recordedBlob = null;
+      const url = URL.createObjectURL(file);
+      $("c_audio_preview").src = url;
+      $("c_audio_preview").style.display = "block";
+      $("c_rec_status").innerHTML = `<span style="color:var(--ok)">✓ Đã chọn file: ${file.name}</span>`;
+    }
+  });
+}
+
+if ($("c_go")) {
+  $("c_go").addEventListener("click", async () => {
+    const name = ($("c_name").value || "").trim();
+    const desc = ($("c_desc").value || "").trim();
+    const gender = $("c_gender").value;
+    const fileInput = $("c_file").files[0];
+    const cStatus = $("c_status");
+
+    if (!name) {
+      cStatus.innerHTML = `<span class="err">Vui lòng nhập Tên / ID giọng!</span>`;
+      return;
+    }
+
+    let audioToSend = null;
+    if (fileInput) {
+      audioToSend = fileInput;
+    } else if (recordedBlob) {
+      audioToSend = new File([recordedBlob], `recorded_voice.wav`, { type: "audio/wav" });
+    }
+
+    if (!audioToSend) {
+      cStatus.innerHTML = `<span class="err">Vui lòng Ghi âm từ Micro hoặc Chọn 1 file Audio mẫu!</span>`;
+      return;
+    }
+
+    cStatus.innerHTML = `<span>⏳ Đang phân tích & trích xuất đặc trưng giọng...</span>`;
+    $("c_go").disabled = true;
+
+    try {
+      const fd = new FormData();
+      fd.append("name", name);
+      fd.append("audio", audioToSend);
+      fd.append("description", desc);
+      fd.append("gender", gender);
+
+      const r = await fetch(API + "/voices", {
+        method: "POST",
+        headers: authHeaders(),
+        body: fd,
+      });
+
+      const res = await r.json();
+      if (!r.ok) throw new Error(res.detail || r.status);
+
+      cStatus.innerHTML = `<span style="color:var(--ok); font-weight:600;">🎉 Đã nạp thành công giọng '${res.id}' vào DB!</span>`;
+      await init();
+      if ($("voice")) {
+        $("voice").value = res.id;
+      }
+    } catch (e) {
+      cStatus.innerHTML = `<span class="err">Lỗi nạp giọng: ${e.message}</span>`;
+    } finally {
+      $("c_go").disabled = false;
+    }
+  });
+}
+
 init();
 </script>
 </body>

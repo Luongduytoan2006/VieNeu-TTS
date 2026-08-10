@@ -43,6 +43,8 @@ WORKDIR /app
 #    uv tự resolve lại khi cần), nên build vẫn thành công thay vì vỡ vì lock cũ.
 COPY pyproject.toml uv.lock ./
 RUN uv sync --no-install-project --no-dev
+# Cài đặt torch + torchaudio bản CPU nhẹ (~150MB) để trích xuất đặc trưng cho tính năng Clone Giọng (FBank)
+RUN uv pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
 
 # 2) Copy code app: entrypoint + backend (server/) và giao diện (ui/).
 #    config.py: UI_DIR = repo_root/ui → /app/ui ; STORAGE_LOCAL_DIR =

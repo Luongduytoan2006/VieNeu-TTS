@@ -33,3 +33,7 @@ tmp/
 .claude/
 
 logs
+
+
+.agents/
+.codex/

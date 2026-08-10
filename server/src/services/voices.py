@@ -21,7 +21,7 @@ from ..schemas import DEFAULT_STYLE, VoiceInfo, VoicesResponse
 
 logger = logging.getLogger("Vieneu.Voices")
 
-ALLOWED_EXT = {".wav", ".mp3", ".flac", ".ogg", ".m4a"}
+ALLOWED_EXT = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".webm"}
 _UPLOAD_DIR = Path(settings.STORAGE_LOCAL_DIR) / "uploads"
 _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
