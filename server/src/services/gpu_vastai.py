@@ -470,10 +470,12 @@ def run(job) -> None:
 
         # Đẩy WAV lên R2 (VPS đẩy — GPU không giữ R2 secret).
         key = f"audio/{job.id}.wav"
-        url = get_storage().put(key, out_wav.read_bytes(), "audio/wav")
+        data = out_wav.read_bytes()
+        url = get_storage().put(key, data, "audio/wav")
 
         job.audio_key = key
         job.audio_url = url
+        job.audio_size_bytes = len(data)
         job.duration_sec = result.get("audio_sec")
         job.sample_rate = result.get("sample_rate")
         job.elapsed_sec = round(time.time() - t0, 3)

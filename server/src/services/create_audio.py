@@ -85,7 +85,8 @@ def resolve_voice(user_ref: str, voice: Optional[str]) -> dict:
 
 
 def create(text: str, voice: Optional[str], style: str, temperature: float,
-           max_chars: int, mode: str = MODE_AUTO, user_ref: str = "default") -> Job:
+           max_chars: int, mode: str = MODE_AUTO, user_ref: str = "default",
+           name_audio: Optional[str] = None) -> Job:
     """Kiểm tra điều kiện, chốt mode, tạo job. Trả về Job (đã có id + mode)."""
     # 1. Model phải sẵn sàng (CPU in-process synth cần model nạp sẵn).
     if not engine.loaded:
@@ -104,7 +105,8 @@ def create(text: str, voice: Optional[str], style: str, temperature: float,
     # 5. Tạo job async, đính kèm RECORD giọng (dict emb+codes) để worker (cpu/gpu)
     #    dùng thẳng — không phải tra lại catalog. CPU==GPU cùng 1 record.
     job = manager.create(text, voice_id, style, temperature, max_chars,
-                         mode=resolved, voice_record=record, user_ref=user_ref)
+                         mode=resolved, voice_record=record, user_ref=user_ref,
+                         name_audio=name_audio)
     logger.info("🎬 tạo job %s user=%s mode=%s (yêu cầu=%s, %d từ) voice=%s src=%s",
                 job.id[:8], user_ref, resolved, mode, count_words(text), voice_id,
                 record.get("source"))

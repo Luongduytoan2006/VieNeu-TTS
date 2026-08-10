@@ -26,8 +26,8 @@ os.environ.setdefault("STORAGE_BACKEND", "local")
 from src.config import settings  # noqa: E402
 from src.services.create_audio import CreateError, count_words, resolve_mode  # noqa: E402
 
-# 1000 từ (tách theo khoảng trắng) → đạt ngưỡng GPU mặc định (GPU_MIN_WORDS=1000).
-LONG_TEXT = " ".join(["từ"] * 1000)
+# Đủ dài theo ngưỡng GPU hiện tại (có thể được .env override).
+LONG_TEXT = " ".join(["từ"] * settings.GPU_MIN_WORDS)
 SHORT_TEXT = "xin chào thế giới"          # 3 từ
 
 
@@ -38,7 +38,7 @@ def test_count_words_basic():
     assert count_words("") == 0
     # Khoảng trắng thừa / xuống dòng không làm sai số từ.
     assert count_words("  a   b  \n c ") == 3
-    assert count_words(LONG_TEXT) == 1000
+    assert count_words(LONG_TEXT) == settings.GPU_MIN_WORDS
 
 
 # ── resolve_mode: auto ─────────────────────────────────────────────────────────

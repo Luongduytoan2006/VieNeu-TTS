@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     total_chunks  INTEGER NOT NULL DEFAULT 0,
     audio_key     TEXT,
     audio_url     TEXT,
+    name_audio    VARCHAR(50),
+    audio_size_bytes BIGINT,
     duration_sec  REAL,
     elapsed_sec   REAL,
     sample_rate   INTEGER,
@@ -68,6 +70,13 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_user ON jobs(user_ref, created_at);
 CREATE INDEX IF NOT EXISTS idx_voices_user ON voices(user_ref, created_at);
+
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS name_audio VARCHAR(50);
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS audio_size_bytes BIGINT;
+UPDATE jobs
+SET name_audio = LEFT(
+    COALESCE(NULLIF(regexp_replace(audio_key, '^.*/', ''), ''), id || '.wav'), 50)
+WHERE name_audio IS NULL OR name_audio = '';
 """
 
 

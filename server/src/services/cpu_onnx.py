@@ -84,6 +84,7 @@ def run(job: Job) -> None:
 
     job.audio_key = key
     job.audio_url = url
+    job.audio_size_bytes = len(data)
     job.duration_sec = round(len(final) / sr, 3)
     job.elapsed_sec = round(time.time() - t0, 3)
     job.sample_rate = sr

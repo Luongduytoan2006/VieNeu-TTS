@@ -40,6 +40,7 @@ class Job:
     max_chars: int
     user_ref: str = "default"
     mode: str = MODE_CPU
+    name_audio: Optional[str] = None
     # Record giọng (dict: speaker_emb+codes numpy) đã lấy từ DB/preset lúc tạo job.
     # Worker cpu/gpu dùng thẳng — không tra lại catalog. KHÔNG persist (numpy).
     voice_record: Optional[dict] = None
@@ -49,6 +50,7 @@ class Job:
     progress: float = 0.0
     audio_url: Optional[str] = None
     audio_key: Optional[str] = None
+    audio_size_bytes: Optional[int] = None
     duration_sec: Optional[float] = None
     elapsed_sec: Optional[float] = None
     sample_rate: Optional[int] = None
@@ -75,12 +77,18 @@ def _row_to_job(row: dict) -> Job:
             user_ref=row["user_ref"], mode=row["mode"], status=row["status"],
             total_chunks=row["total_chunks"], done_chunks=row["done_chunks"],
             progress=row["progress"], audio_url=row["audio_url"], audio_key=row["audio_key"],
+            name_audio=row.get("name_audio") or _default_audio_name(row["id"]),
+            audio_size_bytes=row.get("audio_size_bytes"),
             duration_sec=row["duration_sec"], elapsed_sec=row["elapsed_sec"],
             sample_rate=row["sample_rate"], instance_id=row["instance_id"],
             error=row["error"])
     j.created_at = row["created_at"]
     j.updated_at = row["updated_at"]
     return j
+
+
+def _default_audio_name(job_id: str) -> str:
+    return f"{job_id}.wav"
 
 
 class JobManager:
@@ -90,11 +98,13 @@ class JobManager:
 
     def create(self, text: str, voice: Optional[str], style: str, temperature: float,
                max_chars: int, mode: str = MODE_CPU, voice_record: Optional[dict] = None,
-               user_ref: str = "default") -> Job:
-        job = Job(id=str(uuid.uuid4()), text=text, voice=voice,
+               user_ref: str = "default", name_audio: Optional[str] = None) -> Job:
+        job_id = str(uuid.uuid4())
+        display_name = (name_audio or "").strip()[:50] or _default_audio_name(job_id)
+        job = Job(id=job_id, text=text, voice=voice,
                   style=style or DEFAULT_STYLE, temperature=temperature,
                   max_chars=max_chars, mode=mode, voice_record=voice_record,
-                  user_ref=user_ref)
+                  user_ref=user_ref, name_audio=display_name)
         with self._lock:
             self._jobs[job.id] = job
         job.touch()             # ghi bản ghi đầu tiên xuống DB
@@ -116,6 +126,17 @@ class JobManager:
             job.cancel.set()
             return True
         return False
+
+    def forget(self, job_id: str) -> None:
+        """Xóa job khỏi cache RAM sau khi admin đã xóa DB row."""
+        with self._lock:
+            self._jobs.pop(job_id, None)
+
+    def rename(self, job_id: str, name_audio: str) -> None:
+        """Cập nhật tên hiển thị cho job còn trong RAM, nếu có."""
+        job = self._jobs.get(job_id)
+        if job is not None:
+            job.name_audio = name_audio
 
     def active_count(self) -> int:
         try:

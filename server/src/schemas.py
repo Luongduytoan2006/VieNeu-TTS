@@ -39,12 +39,20 @@ class TTSCreate(BaseModel):
     mode: str = Field(default=MODE_AUTO,
                       description="cpu | gpu | auto. gpu chỉ hợp lệ khi context ≥ ngưỡng số từ; "
                                   "auto = BE tự chọn.")
+    name_audio: Optional[str] = Field(
+        default=None, max_length=50,
+        description="Tên hiển thị của file audio. Bỏ trống = {job_id}.wav.")
 
 
 class JobCreated(BaseModel):
     id: str = Field(..., description="Job id (uuid). Dùng để poll / download / cancel.")
     status: str
     mode: str = Field(..., description="Mode thực tế đã chọn: cpu | gpu.")
+    name_audio: str
+    audio_key: Optional[str] = None
+    audio_size_bytes: Optional[int] = None
+    created_at: datetime
+    updated_at: datetime
     poll_url: str
     download_url: str
 
@@ -58,6 +66,9 @@ class JobStatus(BaseModel):
     total_chunks: int
     voice: Optional[str] = None
     style: str
+    name_audio: Optional[str] = None
+    audio_key: Optional[str] = None
+    audio_size_bytes: Optional[int] = None
     duration_sec: Optional[float] = None
     elapsed_sec: Optional[float] = None
     sample_rate: Optional[int] = None
@@ -69,6 +80,63 @@ class JobStatus(BaseModel):
     download_url: Optional[str] = Field(default=None, description="Có khi status=done.")
     created_at: datetime
     updated_at: datetime
+
+
+class JobInfo(BaseModel):
+    id: str
+    user_ref: str
+    text: str
+    voice: Optional[str] = None
+    style: str
+    temperature: float
+    max_chars: int
+    mode: str
+    status: str
+    progress: float
+    done_chunks: int
+    total_chunks: int
+    name_audio: Optional[str] = None
+    audio_key: Optional[str] = None
+    audio_size_bytes: Optional[int] = None
+    duration_sec: Optional[float] = None
+    elapsed_sec: Optional[float] = None
+    sample_rate: Optional[int] = None
+    instance_id: Optional[int] = None
+    error: Optional[str] = None
+    download_url: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class JobsSummary(BaseModel):
+    total_jobs: int = 0
+    queued_jobs: int = 0
+    running_jobs: int = 0
+    done_jobs: int = 0
+    cancelled_jobs: int = 0
+    error_jobs: int = 0
+    cpu_jobs: int = 0
+    gpu_jobs: int = 0
+    total_duration_sec: float = 0
+    total_elapsed_sec: float = 0
+    total_audio_size_bytes: int = 0
+
+
+class JobsResponse(BaseModel):
+    summary: JobsSummary
+    jobs: List[JobInfo]
+
+
+class JobUpdate(BaseModel):
+    name_audio: str = Field(..., min_length=1, max_length=50,
+                            description="Tên hiển thị mới của file audio.")
+
+
+class JobDeleteResponse(BaseModel):
+    id: str
+    deleted_job: bool
+    deleted_audio: bool
+    audio_key: Optional[str] = None
 
 
 # ── Voices ────────────────────────────────────────────────────────────────────

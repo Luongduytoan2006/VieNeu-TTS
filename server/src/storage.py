@@ -22,6 +22,7 @@ class Storage(Protocol):
     def url_for(self, key: str) -> str: ...
     def open(self, key: str) -> bytes: ...
     def exists(self, key: str) -> bool: ...
+    def size(self, key: str) -> Optional[int]: ...
     def delete(self, key: str) -> None: ...
 
 
@@ -51,6 +52,10 @@ class LocalStorage:
 
     def exists(self, key: str) -> bool:
         return self._path(key).exists()
+
+    def size(self, key: str) -> Optional[int]:
+        p = self._path(key)
+        return p.stat().st_size if p.exists() else None
 
     def delete(self, key: str) -> None:
         p = self._path(key)
@@ -117,6 +122,13 @@ class R2Storage:
             return True
         except ClientError:
             return False
+
+    def size(self, key: str) -> Optional[int]:
+        from botocore.exceptions import ClientError
+        try:
+            return int(self._s3.head_object(Bucket=self.bucket, Key=key.lstrip("/"))["ContentLength"])
+        except ClientError:
+            return None
 
     def delete(self, key: str) -> None:
         self._s3.delete_object(Bucket=self.bucket, Key=key.lstrip("/"))

@@ -28,6 +28,8 @@
           font-size:15px; font-weight:600; cursor:pointer; margin-top:16px; }
   button:disabled { opacity:.5; cursor:not-allowed; }
   button.ghost { background:transparent; border:1px solid var(--line); color:var(--fg); }
+  button.small { padding:7px 10px; font-size:12px; margin-top:0; }
+  button.danger { background:var(--err); }
   .modes { display:flex; gap:8px; margin-top:6px; }
   .modes .opt { flex:1; text-align:center; padding:9px; border:1px solid var(--line);
           border-radius:8px; cursor:pointer; font-size:13px; user-select:none; }
@@ -45,6 +47,20 @@
   .hint { font-size:12px; color:var(--mut); margin-top:4px; }
   code { background:#0d1117; padding:1px 5px; border-radius:4px; font-size:12px; }
   .dot { display:inline-block; width:8px; height:8px; border-radius:99px; margin-right:5px; }
+  .jobs-head { display:flex; gap:8px; flex-wrap:wrap; align-items:end; margin-top:10px; }
+  .jobs-head > div { flex:1; min-width:160px; }
+  .summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:8px;
+          margin-top:12px; }
+  .sum { background:#0d1117; border:1px solid var(--line); border-radius:8px; padding:9px; }
+  .sum b { display:block; font-size:16px; }
+  .sum span { color:var(--mut); font-size:12px; }
+  .job-list { margin-top:12px; display:flex; flex-direction:column; gap:10px; }
+  .job { border:1px solid var(--line); border-radius:8px; padding:10px; background:#111821; }
+  .job-top { display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+  .job-name { font-weight:700; overflow-wrap:anywhere; }
+  .job-meta { color:var(--mut); font-size:12px; overflow-wrap:anywhere; }
+  .job-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; align-items:center; }
+  .job-actions input { max-width:260px; padding:7px 9px; font-size:12px; }
 </style>
 </head>
 <body>
@@ -56,6 +72,8 @@
   <div class="card">
     <label for="apikey">API key (Bearer) <span class="hint" style="display:inline">— gửi kèm <code>Authorization: Bearer …</code>, lưu trên trình duyệt này</span></label>
     <input id="apikey" type="password" placeholder="Dán API key…" autocomplete="off" />
+    <label for="userid">User ID</label>
+    <input id="userid" type="text" placeholder="default" autocomplete="off" />
   </div>
 
   <div class="card">
@@ -82,6 +100,9 @@
       </div>
     </div>
 
+    <label for="name_audio">Tên file audio</label>
+    <input id="name_audio" type="text" maxlength="50" placeholder="Bỏ trống = job_id.wav" />
+
     <label>Chế độ xử lý</label>
     <div class="modes" id="modes">
       <div class="opt on" data-mode="auto">Auto</div>
@@ -95,6 +116,23 @@
 
     <div class="bar"><i id="prog"></i></div>
     <div class="status" id="status"></div>
+    <audio id="audio" controls style="display:none"></audio>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 4px; font-size:16px;">Jobs</h3>
+    <div class="sub" style="margin-bottom:12px;">Xem, đổi tên, hoặc xóa job audio đã tạo.</div>
+    <div class="jobs-head">
+      <div>
+        <label for="jobs_user">Lọc theo User ID</label>
+        <input id="jobs_user" type="text" placeholder="default" />
+      </div>
+      <button id="jobs_user_btn" class="ghost">Theo user</button>
+      <button id="jobs_all_btn" class="ghost">Tất cả</button>
+    </div>
+    <div id="jobs_status" class="status"></div>
+    <div id="jobs_summary" class="summary"></div>
+    <div id="jobs_list" class="job-list"></div>
   </div>
 
   <div class="card">
@@ -151,12 +189,16 @@ const wordCount = (s) => (s.trim().match(/\S+/g) || []).length;
 
 // ── API key (Bearer) — 1 mã dùng chung, lưu localStorage trên máy này ─────────
 const KEY_STORE = "vieneu_api_key";
+const USER_STORE = "vieneu_user_id";
 const getKey = () => ($("apikey").value || "").trim();
+const getUser = () => ($("userid").value || "").trim();
 // Header Authorization chỉ gắn khi có key (BE bỏ auth nếu VIENEU_API_KEY rỗng).
 function authHeaders(extra){
   const h = Object.assign({}, extra || {});
   const k = getKey();
   if(k) h["Authorization"] = "Bearer " + k;
+  const u = getUser();
+  if(u) h["X-User-Id"] = u;
   return h;
 }
 
@@ -164,6 +206,41 @@ async function jget(p){
   const r = await fetch(API+p, {headers: authHeaders()});
   if(!r.ok) throw new Error((await r.json().catch(()=>({}))).detail||r.status);
   return r.json();
+}
+
+async function jpatch(p, body){
+  const r = await fetch(API+p, {method:"PATCH",
+                                headers:authHeaders({"Content-Type":"application/json"}),
+                                body:JSON.stringify(body)});
+  const res = await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(res.detail||r.status);
+  return res;
+}
+
+async function jdelete(p){
+  const r = await fetch(API+p, {method:"DELETE", headers:authHeaders()});
+  const res = await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(res.detail||r.status);
+  return res;
+}
+
+function esc(s){
+  return String(s ?? "").replace(/[&<>"']/g, c => ({
+    "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"
+  })[c]);
+}
+
+function bytes(n){
+  if(n == null) return "-";
+  let v = Number(n), units = ["B","KB","MB","GB"];
+  let i = 0;
+  while(v >= 1000 && i < units.length - 1){ v /= 1000; i++; }
+  return `${v.toFixed(i ? 2 : 0)} ${units[i]}`;
+}
+
+function fmtDate(s){
+  if(!s) return "-";
+  return new Date(s).toLocaleString();
 }
 
 // ── init: health + voices + styles ──────────────────────────────────────────
@@ -194,6 +271,7 @@ async function init(){
   }catch(e){}
 
   updateChars();
+  loadJobs("user").catch(()=>{});
 }
 
 function updateChars(){
@@ -224,7 +302,8 @@ async function synth(){
   $("audio").style.display="none"; $("status").textContent=""; $("status").className="status";
   $("prog").style.width="0";
   const body = { text:$("text").value, voice:$("voice").value||null,
-                 style:$("style").value, mode:curMode };
+                 style:$("style").value, mode:curMode,
+                 name_audio:($("name_audio").value||"").trim()||null };
   let res;
   try{
     const r = await fetch(API+"/tts", {method:"POST",
@@ -261,6 +340,7 @@ function poll(id, mode){
         const url = URL.createObjectURL(await r.blob());
         const a=$("audio"); a.src = url; a.style.display="block"; a.play().catch(()=>{});
       }catch(e){ $("status").innerHTML += ` <span class="err">(tải audio lỗi: ${e.message})</span>`; }
+      loadJobs("user").catch(()=>{});
     } else if(j.status==="cancelled"){
       done(); $("status").innerHTML = `${badge} đã hủy.`;
     } else {
@@ -276,17 +356,116 @@ async function cancel(){
   await fetch(API+"/tts/"+curJob, {method:"DELETE", headers: authHeaders()}).catch(()=>{});
 }
 
+// ── Jobs management ─────────────────────────────────────────────────────────
+function renderSummary(s){
+  $("jobs_summary").innerHTML = [
+    ["Tổng", s.total_jobs],
+    ["CPU", s.cpu_jobs],
+    ["GPU", s.gpu_jobs],
+    ["Done", s.done_jobs],
+    ["Error", s.error_jobs],
+    ["Audio", bytes(s.total_audio_size_bytes)],
+  ].map(([label, value]) => `<div class="sum"><b>${esc(value)}</b><span>${label}</span></div>`).join("");
+}
+
+function renderJobs(items){
+  if(!items.length){
+    $("jobs_list").innerHTML = `<div class="hint">Không có job.</div>`;
+    return;
+  }
+  $("jobs_list").innerHTML = items.map(j => {
+    const name = j.name_audio || (j.id + ".wav");
+    const canDelete = !["queued","running"].includes(j.status);
+    return `<div class="job" data-id="${esc(j.id)}">
+      <div class="job-top">
+        <div>
+          <div class="job-name">${esc(name)}</div>
+          <div class="job-meta">${esc(j.id)} · user=${esc(j.user_ref)} · voice=${esc(j.voice||"-")}</div>
+          <div class="job-meta">${esc(j.status)} · ${esc(j.mode)} · ${bytes(j.audio_size_bytes)} · ${esc(j.duration_sec ?? "-")}s · ${fmtDate(j.created_at)}</div>
+        </div>
+        <span class="pill ${esc(j.mode)}">${esc(String(j.mode).toUpperCase())}</span>
+      </div>
+      <div class="job-actions">
+        <input id="rename_${esc(j.id)}" maxlength="50" value="${esc(name)}" />
+        <button class="small ghost" onclick="renameJob('${esc(j.id)}')">Đổi tên</button>
+        <button class="small ghost" onclick="downloadJob('${esc(j.id)}')">Tải</button>
+        <button class="small danger" ${canDelete ? "" : "disabled"} onclick="deleteJob('${esc(j.id)}')">Xóa</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+async function loadJobs(scope){
+  const user = ($("jobs_user").value || getUser() || "default").trim();
+  $("jobs_status").textContent = "Đang tải jobs...";
+  try{
+    const data = await jget(scope === "all" ? "/jobs" : `/jobs/users/${encodeURIComponent(user)}`);
+    renderSummary(data.summary);
+    renderJobs(data.jobs);
+    $("jobs_status").textContent = `${data.summary.total_jobs} job`;
+  }catch(e){
+    $("jobs_status").innerHTML = `<span class="err">Lỗi tải jobs: ${e.message}</span>`;
+  }
+}
+
+async function renameJob(id){
+  const input = $(`rename_${id}`);
+  try{
+    await jpatch(`/jobs/${encodeURIComponent(id)}`, {name_audio:input.value.trim()});
+    $("jobs_status").textContent = "Đã đổi tên.";
+    await loadJobs("user");
+  }catch(e){
+    $("jobs_status").innerHTML = `<span class="err">Lỗi đổi tên: ${e.message}</span>`;
+  }
+}
+
+async function deleteJob(id){
+  if(!confirm("Xóa job và file audio trong storage?")) return;
+  try{
+    const res = await jdelete(`/jobs/${encodeURIComponent(id)}`);
+    $("jobs_status").textContent = res.deleted_audio ? "Đã xóa job và audio." : "Đã xóa job.";
+    await loadJobs("user");
+  }catch(e){
+    $("jobs_status").innerHTML = `<span class="err">Lỗi xóa job: ${e.message}</span>`;
+  }
+}
+
+async function downloadJob(id){
+  try{
+    const r = await fetch(API+`/tts/${encodeURIComponent(id)}/download`, {headers: authHeaders()});
+    if(!r.ok) throw new Error((await r.json().catch(()=>({}))).detail||r.status);
+    const url = URL.createObjectURL(await r.blob());
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = ($(`rename_${id}`)?.value || `${id}.wav`).trim();
+    a.click();
+    URL.revokeObjectURL(url);
+  }catch(e){
+    $("jobs_status").innerHTML = `<span class="err">Lỗi tải audio: ${e.message}</span>`;
+  }
+}
+
 // ── wire ────────────────────────────────────────────────────────────────────
 // Key: nạp từ localStorage khi mở, lưu lại mỗi lần gõ, gọi lại init() để thử kết nối.
 $("apikey").value = localStorage.getItem(KEY_STORE) || "";
+$("userid").value = localStorage.getItem(USER_STORE) || "";
+$("jobs_user").value = $("userid").value || "default";
 $("apikey").addEventListener("input", ()=>{
   localStorage.setItem(KEY_STORE, getKey());
   clearTimeout(window._keyDebounce);
   window._keyDebounce = setTimeout(init, 400);   // key đổi → thử lại health/voices
 });
+$("userid").addEventListener("input", ()=>{
+  localStorage.setItem(USER_STORE, getUser());
+  $("jobs_user").value = getUser() || "default";
+  clearTimeout(window._userDebounce);
+  window._userDebounce = setTimeout(init, 400);
+});
 $("text").addEventListener("input", updateChars);
 $("go").addEventListener("click", synth);
 $("cancel").addEventListener("click", cancel);
+$("jobs_user_btn").addEventListener("click", ()=>loadJobs("user"));
+$("jobs_all_btn").addEventListener("click", ()=>loadJobs("all"));
 document.querySelectorAll(".modes .opt").forEach(o =>
   o.addEventListener("click", ()=>setMode(o.dataset.mode)));
 // ── Voice Cloning: MediaRecorder + WAV Convert + Enroll API ─────────────────

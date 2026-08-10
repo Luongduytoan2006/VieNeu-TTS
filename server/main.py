@@ -33,7 +33,10 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.security import HTTPBearer
 
 from src.config import settings
-from src.controller import router as api_router
+from src.controllers.jobs import router as jobs_router
+from src.controllers.system import router as system_router
+from src.controllers.tts import router as tts_router
+from src.controllers.voices import router as voices_router
 from src.engine import engine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -183,7 +186,10 @@ app.add_middleware(
 )
 
 bearer_scheme = HTTPBearer(auto_error=False)
-app.include_router(api_router, dependencies=[Depends(bearer_scheme)])
+app.include_router(system_router, dependencies=[Depends(bearer_scheme)])
+app.include_router(voices_router, dependencies=[Depends(bearer_scheme)])
+app.include_router(tts_router, dependencies=[Depends(bearer_scheme)])
+app.include_router(jobs_router, dependencies=[Depends(bearer_scheme)])
 
 
 # ── /files/{key} — phục vụ audio khi storage=local ────────────────────────────
@@ -208,6 +214,9 @@ def api_root() -> JSONResponse:
             f"GET  {API_PREFIX}/voices/{{id}}", f"DELETE {API_PREFIX}/voices/{{id}}",
             f"POST {API_PREFIX}/tts", f"GET  {API_PREFIX}/tts/{{id}}",
             f"DELETE {API_PREFIX}/tts/{{id}}", f"GET  {API_PREFIX}/tts/{{id}}/download",
+            f"GET  {API_PREFIX}/jobs", f"GET  {API_PREFIX}/jobs/users/{{user_ref}}",
+            f"GET  {API_PREFIX}/jobs/{{id}}", f"PATCH {API_PREFIX}/jobs/{{id}}",
+            f"DELETE {API_PREFIX}/jobs/{{id}}",
         ],
     })
 
