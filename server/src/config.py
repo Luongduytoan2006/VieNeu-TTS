@@ -119,5 +119,14 @@ class Settings:
     # đối, cùng origin (chạy sau mọi proxy/domain). Chỉ đặt khi API ở host khác.
     API_BASE_URL: str = os.getenv("VIENEU_API_BASE", "")
 
+    # ── OpenVoice-owned result delivery ─────────────────────────────────────
+    OPENVOICE_BASE_URL: str = os.getenv(
+        "OPENVOICE_BASE_URL", "http://host.docker.internal:3011").rstrip("/")
+    OPENVOICE_DELIVERY_TIMEOUT: int = int(os.getenv("OPENVOICE_DELIVERY_TIMEOUT", "120"))
+    OPENVOICE_CALLBACK_RETRIES: int = int(os.getenv("OPENVOICE_CALLBACK_RETRIES", "3"))
+    OPENVOICE_R2_UPLOAD_ORIGIN: str = os.getenv("OPENVOICE_R2_UPLOAD_ORIGIN", "").rstrip("/")
+    OPENVOICE_ALLOW_HTTP: bool = _as_bool(os.getenv("OPENVOICE_ALLOW_HTTP", "0"))
+    MAX_DELIVERY_BYTES: int = int(os.getenv("MAX_DELIVERY_BYTES", str(256 * 1024 * 1024)))
+
 
 settings = Settings()

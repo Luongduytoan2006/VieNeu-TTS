@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     sample_rate   INTEGER,
     instance_id   BIGINT,             -- (GPU) truy vết tiền
     error         TEXT,
+    delivery_kind TEXT NOT NULL DEFAULT 'vieneu',
+    external_generation_id TEXT,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -73,6 +75,11 @@ CREATE INDEX IF NOT EXISTS idx_voices_user ON voices(user_ref, created_at);
 
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS name_audio VARCHAR(50);
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS audio_size_bytes BIGINT;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS delivery_kind TEXT NOT NULL DEFAULT 'vieneu';
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS external_generation_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_external_generation
+    ON jobs(user_ref, external_generation_id)
+    WHERE external_generation_id IS NOT NULL;
 UPDATE jobs
 SET name_audio = LEFT(
     COALESCE(NULLIF(regexp_replace(audio_key, '^.*/', ''), ''), id || '.wav'), 50)

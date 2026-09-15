@@ -18,9 +18,12 @@ os.environ["ACCESS_SECRET_KEY"] = ""
 
 import main  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
-from src.repositories import jobs_repo  # noqa: E402
-from src.services import create_audio, job_admin  # noqa: E402
 from src.config import settings  # noqa: E402
+from src.controllers import tts as tts_controller  # noqa: E402
+from src.repositories import jobs_repo  # noqa: E402
+from src.schemas import DeliveryCapability  # noqa: E402
+from src.services import create_audio, job_admin  # noqa: E402
+from src.services.jobs import Job  # noqa: E402
 
 settings.API_KEY = ""
 
@@ -146,6 +149,65 @@ def test_create_tts_returns_name_and_timestamps():
     assert "created_at" in body
     assert "updated_at" in body
     assert create.call_args.kwargs["name_audio"] == "custom.wav"
+
+
+def test_create_tts_threads_external_delivery_without_exposing_capability():
+    generation_id = "4f8efef0-bf4f-41e7-a193-b97d51d15d90"
+    fake_job = SimpleNamespace(
+        id="created-2", status="queued", mode="cpu", name_audio="custom.wav",
+        audio_key=None, audio_size_bytes=None, created_at=NOW, updated_at=NOW,
+        delivery_kind="openvoice", external_generation_id=generation_id,
+    )
+    delivery = {"generation_id": generation_id, "capability_token": "x" * 43}
+    with mock.patch.object(create_audio, "create", return_value=fake_job) as create:
+        r = _client().post("/api/v1/tts", json={
+            "text": "xin chao", "mode": "cpu", "delivery": delivery,
+        })
+
+    assert r.status_code == 202
+    assert r.json()["download_url"] is None
+    assert "delivery" not in r.json()
+    assert create.call_args.kwargs["delivery"] == DeliveryCapability.model_validate(delivery)
+
+
+def test_lookup_by_generation_is_owner_scoped():
+    generation_id = "4f8efef0-bf4f-41e7-a193-b97d51d15d90"
+    job = Job(
+        id="job-lookup", text="xin chao", voice=None, style="tu_nhien",
+        temperature=0.8, max_chars=256, user_ref="u1", status="queued",
+        delivery_kind="openvoice", external_generation_id=generation_id,
+    )
+    with mock.patch.object(
+        tts_controller.manager,
+        "get_by_generation",
+        side_effect=lambda user, _generation: job if user == "u1" else None,
+    ) as lookup:
+        found = _client().get(
+            f"/api/v1/tts/by-generation/{generation_id}", headers={"X-User-Id": "u1"},
+        )
+        hidden = _client().get(
+            f"/api/v1/tts/by-generation/{generation_id}", headers={"X-User-Id": "u2"},
+        )
+
+    assert found.status_code == 200
+    assert found.json()["id"] == "job-lookup"
+    assert hidden.status_code == 404
+    assert lookup.call_args_list == [mock.call("u1", generation_id), mock.call("u2", generation_id)]
+
+
+def test_external_delivery_download_is_gone_even_after_ram_capability_is_lost():
+    job = Job(
+        id="job-external", text="xin chao", voice=None, style="tu_nhien",
+        temperature=0.8, max_chars=256, user_ref="u1", status="done",
+        delivery=None, delivery_kind="openvoice",
+        external_generation_id="4f8efef0-bf4f-41e7-a193-b97d51d15d90",
+    )
+    with mock.patch.object(tts_controller.manager, "get", return_value=job):
+        response = _client().get(
+            "/api/v1/tts/job-external/download", headers={"X-User-Id": "u1"},
+        )
+
+    assert response.status_code == 410
 
 
 def _run() -> int:

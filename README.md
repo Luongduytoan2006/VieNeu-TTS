@@ -104,6 +104,9 @@ compose file hardcodes no app variables, so editing `.env` then `docker compose 
 | `MODEL_EAGER_LOAD` | `1` | load the model at startup instead of on first request |
 | `R2_*` | — | R2 endpoint / keys / bucket when `STORAGE_BACKEND=r2` |
 | `VAST_*` | — | Vast.ai key + GPU job settings (on-demand GPU path) |
+| `OPENVOICE_BASE_URL` | `http://host.docker.internal:3011` | fixed OpenVoice grant/completion authority for caller-owned delivery |
+| `OPENVOICE_ALLOW_HTTP` | `0` | allow the exact local OpenVoice HTTP origin; never enable in production |
+| `OPENVOICE_R2_UPLOAD_ORIGIN` | *(empty)* | exact HTTPS origin accepted for direct production upload grants |
 
 > ⚠️ `.env` holds R2 + Vast.ai secrets — it's gitignored. Never commit a real `.env`.
 
@@ -132,6 +135,23 @@ the machine. There is no Docker image for the GPU tier — the `VAST_*` / `R2_*`
 
 Requests carry an `X-User-Id` header (missing → `default`); a user can only see their own jobs and
 custom voices, and the 10 preset voices are shared.
+
+### OpenVoice-owned delivery
+
+`POST /api/v1/tts` remains backward compatible. OpenVoice may add a `delivery` object with
+`generation_id` and `capability_token`; VieNeu then sends the completed WAV to the upload grant
+returned by that fixed OpenVoice authority and does not retain a local/R2 result. The create response
+and polling response expose only `delivery_kind` and `external_generation_id`; `download_url` is
+`null`, and VieNeu's download route returns `410`. A retried create is idempotent for the same
+`X-User-Id` plus generation id. OpenVoice can resolve an ambiguous create with
+`GET /api/v1/tts/by-generation/{generation_id}` using the same `X-User-Id`.
+
+For the current Docker Desktop setup, use `OPENVOICE_BASE_URL=http://host.docker.internal:3011`
+and `OPENVOICE_ALLOW_HTTP=1`. OpenVoice must issue local proxy-upload URLs from that same reachable
+origin (set its `NUXT_VOICE_PUBLIC_BASE_URL` accordingly). When both processes run directly on the
+host, use `http://localhost:3011` instead. Production requires HTTPS, keeps
+`OPENVOICE_ALLOW_HTTP=0`, and allowlists the exact R2 upload origin. Capability tokens and signed
+upload URLs are bearer credentials and must not be logged.
 
 ---
 

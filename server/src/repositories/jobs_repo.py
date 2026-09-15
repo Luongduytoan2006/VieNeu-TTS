@@ -17,7 +17,7 @@ logger = logging.getLogger("Vieneu.JobsRepo")
 _COLS = ("id", "user_ref", "text", "voice_id", "style", "temperature", "max_chars",
          "mode", "status", "progress", "done_chunks", "total_chunks", "audio_key",
          "audio_url", "name_audio", "audio_size_bytes", "duration_sec", "elapsed_sec",
-         "sample_rate", "instance_id", "error")
+         "sample_rate", "instance_id", "error", "delivery_kind", "external_generation_id")
 
 
 def save(job) -> None:
@@ -29,6 +29,8 @@ def save(job) -> None:
         getattr(job, "name_audio", None), getattr(job, "audio_size_bytes", None),
         job.duration_sec, job.elapsed_sec, job.sample_rate,
         getattr(job, "instance_id", None), job.error,
+        getattr(job, "delivery_kind", "vieneu"),
+        getattr(job, "external_generation_id", None),
     )
     with connect() as conn:
         conn.execute(
@@ -36,8 +38,8 @@ def save(job) -> None:
                (id,user_ref,text,voice_id,style,temperature,max_chars,mode,status,
                 progress,done_chunks,total_chunks,audio_key,audio_url,name_audio,
                 audio_size_bytes,duration_sec,elapsed_sec,sample_rate,instance_id,
-                error,updated_at)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
+                error,delivery_kind,external_generation_id,updated_at)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
                ON CONFLICT(id) DO UPDATE SET
                  status=excluded.status, progress=excluded.progress,
                  done_chunks=excluded.done_chunks, total_chunks=excluded.total_chunks,
@@ -46,7 +48,8 @@ def save(job) -> None:
                  audio_size_bytes=excluded.audio_size_bytes,
                  duration_sec=excluded.duration_sec, elapsed_sec=excluded.elapsed_sec,
                  sample_rate=excluded.sample_rate, instance_id=excluded.instance_id,
-                 error=excluded.error, updated_at=now()""",
+                 error=excluded.error, delivery_kind=excluded.delivery_kind,
+                 external_generation_id=excluded.external_generation_id, updated_at=now()""",
             vals,
         )
 
@@ -55,6 +58,17 @@ def get(job_id: str) -> Optional[dict]:
     """1 job (dict thuần) từ DB — dùng khi job không còn trong RAM (sau restart)."""
     with connect() as conn:
         row = conn.execute("SELECT * FROM jobs WHERE id = %s", (job_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_by_generation(user_ref: str, generation_id: str) -> Optional[dict]:
+    """Resolve an idempotent external-delivery job for its owning user."""
+    with connect() as conn:
+        row = conn.execute(
+            """SELECT * FROM jobs
+               WHERE user_ref = %s AND external_generation_id = %s""",
+            (user_ref, generation_id),
+        ).fetchone()
     return dict(row) if row else None
 
 

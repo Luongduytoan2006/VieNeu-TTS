@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from typing import Dict, Optional
 
 from ..repositories import jobs_repo
-from ..schemas import DEFAULT_STYLE, MODE_CPU
+from ..schemas import DEFAULT_STYLE, MODE_CPU, DeliveryCapability
 
 logger = logging.getLogger("Vieneu.Jobs")
 
@@ -56,6 +56,10 @@ class Job:
     sample_rate: Optional[int] = None
     instance_id: Optional[int] = None       # (GPU) truy vết tiền
     error: Optional[str] = None
+    delivery: Optional[DeliveryCapability] = field(default=None, repr=False)
+    delivery_kind: str = "vieneu"
+    external_generation_id: Optional[str] = None
+    delivery_unconfirmed: bool = False
     created_at: datetime = field(default_factory=_now)
     updated_at: datetime = field(default_factory=_now)
     cancel: threading.Event = field(default_factory=threading.Event)
@@ -81,7 +85,8 @@ def _row_to_job(row: dict) -> Job:
             audio_size_bytes=row.get("audio_size_bytes"),
             duration_sec=row["duration_sec"], elapsed_sec=row["elapsed_sec"],
             sample_rate=row["sample_rate"], instance_id=row["instance_id"],
-            error=row["error"])
+            error=row["error"], delivery_kind=row.get("delivery_kind") or "vieneu",
+            external_generation_id=row.get("external_generation_id"))
     j.created_at = row["created_at"]
     j.updated_at = row["updated_at"]
     return j
@@ -98,19 +103,46 @@ class JobManager:
 
     def create(self, text: str, voice: Optional[str], style: str, temperature: float,
                max_chars: int, mode: str = MODE_CPU, voice_record: Optional[dict] = None,
-               user_ref: str = "default", name_audio: Optional[str] = None) -> Job:
+               user_ref: str = "default", name_audio: Optional[str] = None,
+               delivery: Optional[DeliveryCapability] = None) -> Job:
+        external_generation_id = str(delivery.generation_id) if delivery else None
+        if external_generation_id:
+            existing = self.get_by_generation(user_ref, external_generation_id)
+            if existing is not None:
+                return existing
         job_id = str(uuid.uuid4())
         display_name = (name_audio or "").strip()[:50] or _default_audio_name(job_id)
         job = Job(id=job_id, text=text, voice=voice,
                   style=style or DEFAULT_STYLE, temperature=temperature,
                   max_chars=max_chars, mode=mode, voice_record=voice_record,
-                  user_ref=user_ref, name_audio=display_name)
+                  user_ref=user_ref, name_audio=display_name, delivery=delivery,
+                  delivery_kind="openvoice" if delivery else "vieneu",
+                  external_generation_id=external_generation_id)
         with self._lock:
             self._jobs[job.id] = job
-        job.touch()             # ghi bản ghi đầu tiên xuống DB
+        if delivery:
+            try:
+                jobs_repo.save(job)
+            except Exception:
+                with self._lock:
+                    self._jobs.pop(job.id, None)
+                existing = self.get_by_generation(user_ref, external_generation_id)
+                if existing is not None:
+                    return existing
+                raise
+        else:
+            job.touch()         # ghi bản ghi đầu tiên xuống DB
         threading.Thread(target=self._run, args=(job,), daemon=True,
                          name=f"job-{job.id[:8]}").start()
         return job
+
+    def get_by_generation(self, user_ref: str, generation_id: str) -> Optional[Job]:
+        for job in self._jobs.values():
+            if (job.user_ref == user_ref
+                    and job.external_generation_id == generation_id):
+                return job
+        row = jobs_repo.get_by_generation(user_ref, generation_id)
+        return _row_to_job(row) if row else None
 
     def get(self, job_id: str) -> Optional[Job]:
         """RAM trước (job đang chạy, tiến độ realtime); else DB (job cũ)."""

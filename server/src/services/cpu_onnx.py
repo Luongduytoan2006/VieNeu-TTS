@@ -14,8 +14,8 @@ import wave
 import numpy as np
 
 from ..engine import engine
-from ..storage import get_storage
 from .jobs import CANCELLED, DONE, ERROR, RUNNING, Job
+from .result_delivery import store_result
 
 logger = logging.getLogger("Vieneu.CPU")
 
@@ -79,16 +79,15 @@ def run(job: Job) -> None:
     final = join_audio_chunks(wavs, sr=sr, silence_ps=gaps_to_silence(gaps))
     data = _wav_bytes(final, sr)
 
-    key = f"audio/{job.id}.wav"
-    url = get_storage().put(key, data, "audio/wav")
+    duration_sec = round(len(final) / sr, 3)
+    elapsed_sec = round(time.time() - t0, 3)
+    store_result(job, data, duration_sec=duration_sec,
+                 elapsed_sec=elapsed_sec, sample_rate=sr)
 
-    job.audio_key = key
-    job.audio_url = url
-    job.audio_size_bytes = len(data)
-    job.duration_sec = round(len(final) / sr, 3)
+    job.duration_sec = duration_sec
     job.elapsed_sec = round(time.time() - t0, 3)
     job.sample_rate = sr
     job.status = DONE
     job.progress = 100.0
     job.touch()
-    logger.info("✅ CPU job %s xong: %.1fs → %s", job.id[:8], job.duration_sec, url)
+    logger.info("✅ CPU job %s xong: %.1fs", job.id[:8], job.duration_sec)

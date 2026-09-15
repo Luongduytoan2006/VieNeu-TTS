@@ -15,8 +15,12 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
+import threading
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
+from uuid import uuid4
 
 # ── Bootstrap sys.path + env ────────────────────────────────────────────────────
 _SERVER = Path(__file__).resolve().parents[1] / "server"
@@ -163,6 +167,66 @@ def test_destroy_no_instance_is_noop_true():
     with mock.patch.object(gpu_vastai.requests, "request",
                            side_effect=AssertionError("không được gọi HTTP")):
         assert c.destroy() is True
+
+
+def test_gpu_delivery_failure_still_destroys_instance_and_removes_temp_audio():
+    class FakeClient:
+        def __init__(self):
+            self.instance_id = None
+            self.dph = 0.1
+            self.destroyed = False
+
+        def verify(self):
+            return {}
+
+        def search_offer(self):
+            return {"id": 123}
+
+        def create(self, _offer_id):
+            self.instance_id = 456
+            return 456
+
+        def wait_running(self, cancel=None):
+            return None
+
+        def wait_ssh(self):
+            return None
+
+        def setup_and_synth(self, _text, _voice, _style, out_wav, **_kwargs):
+            out_wav.parent.mkdir(parents=True, exist_ok=True)
+            out_wav.write_bytes(b"RIFF")
+            (out_wav.parent / f"{out_wav.stem}.txt").write_text("temporary")
+            return {"audio_sec": 1.0, "sample_rate": 48000}
+
+        def destroy(self):
+            self.destroyed = True
+            return True
+
+    client = FakeClient()
+    job_id = str(uuid4())
+    job = SimpleNamespace(
+        id=job_id, text="xin chao", voice=None, style="tu_nhien",
+        temperature=0.8, max_chars=256, voice_record=None,
+        cancel=threading.Event(), status="queued", progress=0.0,
+        total_chunks=0, done_chunks=0, instance_id=None, error=None,
+        touch=mock.Mock(), delivery=object(),
+    )
+
+    with tempfile.TemporaryDirectory() as directory, \
+            mock.patch.object(gpu_vastai, "_SERVER", Path(directory)), \
+            mock.patch.object(gpu_vastai, "VastAIClient", return_value=client), \
+            mock.patch(
+                "src.services.result_delivery.store_result",
+                side_effect=RuntimeError("delivery failed"),
+            ):
+        gpu_vastai.run(job)
+        output = Path(directory) / "data" / "audio" / f"{job_id}.wav"
+        text = output.parent / f"{job_id}.txt"
+
+        assert job.status == "error"
+        assert client.destroyed is True
+        assert not output.exists()
+        assert not text.exists()
 
 
 # ── Runner khi chạy bằng ``python`` thuần (không có pytest) ─────────────────────

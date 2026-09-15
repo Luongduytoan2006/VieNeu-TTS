@@ -5,10 +5,13 @@ services import từ module này để giữ 1 nguồn sự thật duy nhất.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
+from urllib.parse import urlsplit
+from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # ── Hằng dùng chung ───────────────────────────────────────────────────────────
 STYLE_CHOICES = {
@@ -23,9 +26,91 @@ MODE_CPU = "cpu"
 MODE_GPU = "gpu"
 MODE_AUTO = "auto"          # BE tự chọn theo độ dài context
 MODE_CHOICES = (MODE_CPU, MODE_GPU, MODE_AUTO)
+MAX_DELIVERY_BYTES = 256 * 1024 * 1024
+
+_DELIVERY_HEADER_NAMES = {"Content-Type", "Content-MD5", "If-None-Match"}
+_CONTENT_MD5_PATTERN = r"^[A-Za-z0-9+/]{22}==$"
 
 
 # ── TTS jobs ──────────────────────────────────────────────────────────────────
+class DeliveryCapability(BaseModel):
+    generation_id: UUID
+    capability_token: str = Field(min_length=43, max_length=128)
+
+
+class DeliveryGrant(BaseModel):
+    method: Literal["PUT"]
+    url: str = Field(min_length=1, max_length=4096)
+    headers: dict[Literal["Content-Type", "Content-MD5", "If-None-Match"], str]
+    expires_at: datetime
+
+    @field_validator("url")
+    @classmethod
+    def validate_raw_url(cls, value: str) -> str:
+        if any(ord(char) <= 32 for char in value):
+            raise ValueError("delivery URL contains whitespace or control characters")
+        try:
+            parsed = urlsplit(value)
+            hostname = parsed.hostname
+            _port = parsed.port
+        except ValueError as exc:
+            raise ValueError("delivery URL is invalid") from exc
+        if parsed.scheme not in {"http", "https"} or not hostname:
+            raise ValueError("delivery URL must be an absolute HTTP(S) URL")
+        if parsed.username or parsed.password or parsed.fragment:
+            raise ValueError("delivery URL must not contain userinfo or a fragment")
+        return value
+
+    @field_validator("headers")
+    @classmethod
+    def validate_headers(cls, value: dict[str, str]) -> dict[str, str]:
+        if set(value) != _DELIVERY_HEADER_NAMES:
+            raise ValueError("delivery grant headers must match the upload allowlist")
+        if value["Content-Type"] != "audio/wav":
+            raise ValueError("Content-Type must be audio/wav")
+        if value["If-None-Match"] != "*":
+            raise ValueError("If-None-Match must be *")
+        if re.fullmatch(_CONTENT_MD5_PATTERN, value["Content-MD5"]) is None:
+            raise ValueError("Content-MD5 must be a base64-encoded MD5 digest")
+        return value
+
+    @field_validator("expires_at")
+    @classmethod
+    def validate_expiry_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("expires_at must include a timezone")
+        return value
+
+
+class DeliveryComplete(BaseModel):
+    upstream_job_id: UUID
+    status: Literal["ready", "error"]
+    audio_size_bytes: Optional[int] = Field(default=None, gt=0, le=MAX_DELIVERY_BYTES)
+    object_etag: Optional[str] = Field(default=None, max_length=256)
+    duration_sec: Optional[float] = Field(default=None, ge=0)
+    elapsed_sec: Optional[float] = Field(default=None, ge=0)
+    sample_rate: Optional[int] = Field(default=None, gt=0)
+    error: Optional[str] = Field(default=None, min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_terminal_state(self) -> DeliveryComplete:
+        if self.status == "ready":
+            required = (self.audio_size_bytes, self.duration_sec, self.sample_rate)
+            if any(value is None for value in required) or self.error is not None:
+                raise ValueError("ready delivery requires audio metadata and no error")
+            return self
+
+        media_fields = (
+            self.audio_size_bytes,
+            self.object_etag,
+            self.duration_sec,
+            self.sample_rate,
+        )
+        if self.error is None or any(value is not None for value in media_fields):
+            raise ValueError("error delivery requires an error and null audio metadata")
+        return self
+
+
 class TTSCreate(BaseModel):
     text: str = Field(..., min_length=1, max_length=20000,
                       description="Văn bản cần đọc. Có thể chèn [cười]/[thở dài]/[hắng giọng].",
@@ -42,6 +127,7 @@ class TTSCreate(BaseModel):
     name_audio: Optional[str] = Field(
         default=None, max_length=50,
         description="Tên hiển thị của file audio. Bỏ trống = {job_id}.wav.")
+    delivery: Optional[DeliveryCapability] = None
 
 
 class JobCreated(BaseModel):
@@ -51,10 +137,12 @@ class JobCreated(BaseModel):
     name_audio: str
     audio_key: Optional[str] = None
     audio_size_bytes: Optional[int] = None
+    delivery_kind: str = "vieneu"
+    external_generation_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     poll_url: str
-    download_url: str
+    download_url: Optional[str] = None
 
 
 class JobStatus(BaseModel):
@@ -73,6 +161,9 @@ class JobStatus(BaseModel):
     elapsed_sec: Optional[float] = None
     sample_rate: Optional[int] = None
     error: Optional[str] = None
+    delivery_kind: str = "vieneu"
+    external_generation_id: Optional[str] = None
+    delivery_unconfirmed: bool = False
     # ── Chỉ có ở GPU mode (truy vết máy Vast.ai + tiền) ──────────────────────
     instance_id: Optional[int] = Field(default=None, description="(GPU) id máy Vast.ai đang thuê.")
     dph: Optional[float] = Field(default=None, description="(GPU) giá $/giờ của máy đang thuê.")

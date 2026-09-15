@@ -372,7 +372,7 @@ class VastAIClient:
             if line.startswith("RESULT_JSON:"):
                 result = json.loads(line[len("RESULT_JSON:"):])
         if not result or not result.get("ok"):
-            tail = "\n".join([l for l in lines if l][-8:])
+            tail = "\n".join([entry for entry in lines if entry][-8:])
             raise VastAIError(f"synth_job lỗi (rc={rc}): {tail}")
 
         # 4. Tải WAV về VPS.
@@ -406,8 +406,8 @@ def run(job) -> None:
     Luôn destroy trong ``finally`` (in instance_id sớm để lỡ crash còn hủy tay).
     Tải WAV về VPS rồi VPS đẩy R2 (không đưa R2 secret lên máy community).
     """
-    from ..storage import get_storage
     from .jobs import CANCELLED, DONE, ERROR, RUNNING
+    from .result_delivery import store_result
 
     t0 = time.time()
     client: Optional[VastAIClient] = None
@@ -468,16 +468,14 @@ def run(job) -> None:
         job.progress = 96.0            # synth xong (callback đã bò tới ~95%), sắp upload
         job.touch()
 
-        # Đẩy WAV lên R2 (VPS đẩy — GPU không giữ R2 secret).
-        key = f"audio/{job.id}.wav"
         data = out_wav.read_bytes()
-        url = get_storage().put(key, data, "audio/wav")
+        duration_sec = result.get("audio_sec")
+        sample_rate = result.get("sample_rate")
+        store_result(job, data, duration_sec=duration_sec,
+                     elapsed_sec=round(time.time() - t0, 3), sample_rate=sample_rate)
 
-        job.audio_key = key
-        job.audio_url = url
-        job.audio_size_bytes = len(data)
-        job.duration_sec = result.get("audio_sec")
-        job.sample_rate = result.get("sample_rate")
+        job.duration_sec = duration_sec
+        job.sample_rate = sample_rate
         job.elapsed_sec = round(time.time() - t0, 3)
         job.progress = 100.0
         job.status = DONE
@@ -489,9 +487,9 @@ def run(job) -> None:
         t_load = result.get("t_load_model_s")
         t_import = result.get("t_import_torch_s")
         logger.info("✅ GPU job %s xong: %ss audio · TIMING t_infer=%ss t_load_model=%ss "
-                    "t_import=%ss total=%ss inst=%s → %s",
+                    "t_import=%ss total=%ss inst=%s",
                     job.id[:8], job.duration_sec, t_infer, t_load, t_import,
-                    job.elapsed_sec, job.instance_id, url)
+                    job.elapsed_sec, job.instance_id)
         logger.info("GPU_TIMING_JSON:%s", __import__("json").dumps({
             "job_id": job.id, "n_words": len(job.text.split()),
             "total_s": job.elapsed_sec, "t_infer_s": t_infer,
@@ -519,6 +517,7 @@ def run(job) -> None:
         try:
             out_wav.unlink(missing_ok=True)
             (out_wav.parent / f"{job.id}.txt").unlink(missing_ok=True)
+            (out_wav.parent / f"{job.id}.voice.json").unlink(missing_ok=True)
         except Exception:
             pass
 

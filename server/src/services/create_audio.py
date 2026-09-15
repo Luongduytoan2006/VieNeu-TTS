@@ -16,7 +16,13 @@ from ..config import settings
 from ..engine import engine
 from ..repositories import voices_repo as repo
 from ..schemas import (
-    DEFAULT_STYLE, MODE_AUTO, MODE_CPU, MODE_GPU, MODE_CHOICES, STYLE_CHOICES,
+    DEFAULT_STYLE,
+    MODE_AUTO,
+    MODE_CHOICES,
+    MODE_CPU,
+    MODE_GPU,
+    STYLE_CHOICES,
+    DeliveryCapability,
 )
 from .jobs import Job, manager
 
@@ -86,8 +92,14 @@ def resolve_voice(user_ref: str, voice: Optional[str]) -> dict:
 
 def create(text: str, voice: Optional[str], style: str, temperature: float,
            max_chars: int, mode: str = MODE_AUTO, user_ref: str = "default",
-           name_audio: Optional[str] = None) -> Job:
+           name_audio: Optional[str] = None,
+           delivery: Optional[DeliveryCapability] = None) -> Job:
     """Kiểm tra điều kiện, chốt mode, tạo job. Trả về Job (đã có id + mode)."""
+    if delivery:
+        existing = manager.get_by_generation(user_ref, str(delivery.generation_id))
+        if existing is not None:
+            return existing
+
     # 1. Model phải sẵn sàng (CPU in-process synth cần model nạp sẵn).
     if not engine.loaded:
         raise CreateError(503, "Model chưa sẵn sàng. Xem GET /api/v1/health.")
@@ -106,7 +118,7 @@ def create(text: str, voice: Optional[str], style: str, temperature: float,
     #    dùng thẳng — không phải tra lại catalog. CPU==GPU cùng 1 record.
     job = manager.create(text, voice_id, style, temperature, max_chars,
                          mode=resolved, voice_record=record, user_ref=user_ref,
-                         name_audio=name_audio)
+                         name_audio=name_audio, delivery=delivery)
     logger.info("🎬 tạo job %s user=%s mode=%s (yêu cầu=%s, %d từ) voice=%s src=%s",
                 job.id[:8], user_ref, resolved, mode, count_words(text), voice_id,
                 record.get("source"))
